@@ -4,6 +4,8 @@ A local CLI for turning explicitly selected VOD windows into independent vertica
 
 Every result is `manual_render_unreviewed`. Watch it before posting.
 
+For current progress, verification blockers, and Windows continuation steps, read [the handoff](docs/HANDOFF.md).
+
 ## Requirements
 
 - Python **3.11+** (3.12 recommended).
@@ -166,7 +168,7 @@ Expect 1080×1920, H.264 video, AAC audio, and duration within 0.15 seconds of t
 
 ## Current implementation verification
 
-Implementation is on branch `milestone1-manual-render` in `.worktrees/manual-render` of the parent checkout. It has not been merged or published.
+Implementation is on branch `milestone1-manual-render`; on the original laptop its checkout is `.worktrees/manual-render` of the parent checkout. It has not been merged into main.
 
 On the development laptop, 33 unit/CLI regression checks pass; six generated-media integration tests are skipped because full FFmpeg and ffprobe are unavailable. The environment also blocks network package installation. No real rendered MP4, frame inspection, CUDA transcription, real VOD download, or Windows-native run has been verified. **Milestone 1 remains pending render verification.**
 
