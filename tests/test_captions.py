@@ -61,3 +61,28 @@ class CaptionTests(unittest.TestCase):
                     transcribe(audio,Settings(),target)
             self.assertFalse(target.exists())
             self.assertFalse(target.with_suffix('.manifest.json').exists())
+
+class TypographyTests(unittest.TestCase):
+    def test_wide_hooks_scale_and_three_lines_fit_height(self):
+        import re
+        from clipmatch.captions import overlay_events
+        wide=overlay_events('W'*27,'A',2)[0]
+        size=int(re.search(r'\\fs(\d+)',wide).group(1))
+        self.assertLessEqual(size,28)
+        three=overlay_events('word '*14,'A',2)[0]
+        size=int(re.search(r'\\fs(\d+)',three).group(1))
+        self.assertLessEqual(size*3,120)
+
+    def test_wide_unicode_caption_is_scaled_without_truncation(self):
+        import re
+        from clipmatch.captions import caption_events
+        text='界'*24
+        rendered=caption_events([Word(0,1,text)],1)[0]
+        self.assertIn(text,rendered)
+        size=int(re.search(r'\\fs(\d+)',rendered).group(1))
+        self.assertLessEqual(size,29)
+
+    def test_overlong_label_is_rejected_not_silently_truncated(self):
+        from clipmatch.captions import overlay_events
+        with self.assertRaisesRegex(ValueError,'label'):
+            overlay_events('Hi','X'*31,2)

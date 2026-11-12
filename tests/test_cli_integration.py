@@ -129,5 +129,111 @@ class RenderIntegrationTests(unittest.TestCase):
         self.assertFalse((self.root/'renders'/'broken.manifest.json').exists())
 
 
+    def test_delayed_audio_preserves_silence_and_caption_time(self):
+        from clipmatch.media import SourceWindow, extract_audio
+        import array
+        import wave
+        delayed=self.root/'delayed.mp4'
+        subprocess.run(['ffmpeg','-v','error','-y','-f','lavfi','-i','color=blue:s=640x360:r=30:d=2',
+                        '-itsoffset','0.5','-f','lavfi','-i','sine=frequency=440:sample_rate=48000:duration=1.5',
+                        '-t','2','-c:v','libx264','-c:a','aac',str(delayed)],check=True)
+        audio=self.root/'aligned.wav'
+        extract_audio(SourceWindow(delayed,0,0,1.5,'fixture'),audio)
+        def mean_absolute(path,start,end):
+            with wave.open(str(path),'rb') as wav:
+                wav.setpos(int(start*wav.getframerate()))
+                samples=array.array('h',wav.readframes(int((end-start)*wav.getframerate())))
+            return sum(abs(n) for n in samples)/len(samples)
+        self.assertLess(mean_absolute(audio,.1,.3),20)
+        self.assertGreater(mean_absolute(audio,.7,.9),100)
+        self.job['clips']=[dict(id='delayed',source=str(delayed),start=0,end=1.5,label='A',hook='Delayed cue')]
+        self.spec.write_text(json.dumps(self.job))
+        self.assertEqual(self.invoke(),0)
+        decoded=self.root/'decoded.wav'
+        subprocess.run(['ffmpeg','-v','error','-y','-i',str(self.root/'renders'/'delayed.mp4'),
+                        '-vn','-ac','1','-ar','16000','-c:a','pcm_s16le',str(decoded)],check=True)
+        self.assertLess(mean_absolute(decoded,.1,.3),20)
+        self.assertGreater(mean_absolute(decoded,.7,.9),100)
+
+    def test_rotated_and_anamorphic_sources_render(self):
+        rotated=self.root/'rotated.mp4'
+        anamorphic=self.root/'anamorphic.mp4'
+        subprocess.run(['ffmpeg','-v','error','-y','-i',str(self.source),'-c','copy',
+                        '-metadata:s:v:0','rotate=90',str(rotated)],check=True)
+        subprocess.run(['ffmpeg','-v','error','-y','-i',str(self.source),'-vf','setsar=2',
+                        '-c:v','libx264','-c:a','copy',str(anamorphic)],check=True)
+        self.assertEqual((probe(rotated).width,probe(rotated).height),(360,640))
+        self.job['clips']=[dict(id='rotated',source=str(rotated),start=1,end=2,label='A',hook='Turn around',facecam_rect=[0,0,90,160]),
+                           dict(id='anamorphic',source=str(anamorphic),start=1,end=2,label='B',hook='Wide view',facecam_rect=[0,0,160,90])]
+        self.spec.write_text(json.dumps(self.job))
+        self.assertEqual(self.invoke(),0)
+        for name in ('rotated','anamorphic'):
+            self.assertEqual(probe(self.root/'renders'/f'{name}.mp4').video_duration,1)
+
+
+class SourceProtectionTests(unittest.TestCase):
+    def test_refuses_master_or_clean_output_collision_with_any_local_source(self):
+        for name in ('one.mp4','one.clean.mp4'):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as d:
+                root=Path(d).resolve()
+                (root/'renders').mkdir()
+                original=root/'renders'/name
+                original.write_bytes(b'irreplaceable original')
+                clip=dict(id='one',source=str(original),start=0,end=1,label='A',hook='Hi')
+                spec=root/'job.yaml'
+                spec.write_text(json.dumps(dict(version=1,clips=[clip])))
+                errors=StringIO()
+                with patch('clipmatch.cli.preflight'),patch('clipmatch.cli.probe',return_value=NS(width=640,height=360,duration=2,has_audio=True)),patch('clipmatch.cli.acquire',side_effect=AssertionError('must reject before acquisition')),redirect_stderr(errors):
+                    self.assertEqual(main(['render-manual',str(spec),'--clean']),1)
+                self.assertIn('collid',errors.getvalue())
+                self.assertEqual(original.read_bytes(),b'irreplaceable original')
+
+    def test_refuses_overwriting_another_clips_source(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d).resolve()
+            (root/'renders').mkdir()
+            first=root/'input.mp4'
+            second=root/'renders'/'one.mp4'
+            first.write_bytes(b'first source')
+            second.write_bytes(b'second source')
+            clips=[dict(id='one',source=str(first),start=0,end=1,label='A',hook='Hi'),
+                   dict(id='two',source=str(second),start=0,end=1,label='B',hook='Hello')]
+            spec=root/'job.yaml'
+            spec.write_text(json.dumps(dict(version=1,clips=clips)))
+            errors=StringIO()
+            with patch('clipmatch.cli.preflight'),patch('clipmatch.cli.probe',return_value=NS(width=640,height=360,duration=2,has_audio=True)),patch('clipmatch.cli.acquire',side_effect=AssertionError('must reject before acquisition')),redirect_stderr(errors):
+                self.assertEqual(main(['render-manual',str(spec)]),1)
+            self.assertIn('collid',errors.getvalue())
+            self.assertEqual(second.read_bytes(),b'second source')
+
+class ProvenanceTests(unittest.TestCase):
+    def test_clean_failure_does_not_leave_old_source_sidecar_on_new_master(self):
+        from clipmatch.media import MediaInfo, SourceWindow
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d).resolve()
+            source=root/'source.mp4'; source.write_bytes(b'source')
+            spec=root/'job.yaml'
+            clip=dict(id='one',source=str(source),start=0,end=1,label='A',hook='Hi')
+            job=dict(version=1,clips=[clip]); spec.write_text(json.dumps(job))
+            info=MediaInfo(1080,1920,1,True,'h264','aac',1,1)
+            def acquire(clip,*a,**kw):
+                return SourceWindow(source,0,clip.start,1,'identity')
+            fail_clean=False
+            def render(clip,window,words,settings,output,*,clean=False):
+                if clean and fail_clean:
+                    raise ValueError('clean failed')
+                output.parent.mkdir(parents=True,exist_ok=True)
+                output.write_bytes(f'window {clip.start}'.encode())
+                return info
+            with patch('clipmatch.cli.preflight'),patch('clipmatch.cli.probe',return_value=MediaInfo(640,360,4,True)),patch('clipmatch.cli.acquire',side_effect=acquire),patch('clipmatch.cli.tool_versions',return_value={}),patch('clipmatch.cli.render_key',return_value='key'),patch('clipmatch.cli.resolve_fonts',return_value={}),patch('clipmatch.cli.render_clip',side_effect=render),redirect_stdout(StringIO()),redirect_stderr(StringIO()):
+                self.assertEqual(main(['render-manual',str(spec),'--no-captions']),0)
+                clip.update(start=1,end=2);spec.write_text(json.dumps(job)); fail_clean=True
+                self.assertEqual(main(['render-manual',str(spec),'--no-captions','--clean','--force']),1)
+            sidecar=json.loads((root/'renders'/'one.json').read_text())
+            self.assertEqual(sidecar['source']['start'],1)
+            self.assertIsNone(sidecar['clean_output'])
+            self.assertEqual(sidecar['clean_export_status'],'pending_or_failed')
+
+
 if __name__=='__main__':
     unittest.main()

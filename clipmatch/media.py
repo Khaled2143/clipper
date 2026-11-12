@@ -23,6 +23,8 @@ class MediaInfo:
     has_audio: bool
     video_codec: str = ''
     audio_codec: str = ''
+    video_duration: float | None = None
+    audio_duration: float | None = None
 
 
 @dataclass(frozen=True)
@@ -34,11 +36,14 @@ class SourceWindow:
     identity: str
 
 
-def run(argv: list[str], *, cwd: Path | None = None, timeout: int = 1800) -> str:
+def run(argv: list[str], *, cwd: Path | None = None, timeout: int = 1800,
+        diagnostics: list[str] | None = None) -> str:
     try:
         result = subprocess.run(argv, cwd=cwd, capture_output=True, text=True,
                                 encoding='utf-8', errors='replace', check=True,
                                 timeout=timeout, shell=False)
+        if diagnostics is not None:
+            diagnostics.extend((result.stderr or '').splitlines())
         return result.stdout
     except FileNotFoundError as exc:
         raise ValueError(f"Missing executable: {Path(argv[0]).name}; check installation and PATH") from exc
@@ -93,8 +98,23 @@ def probe(path: Path) -> MediaInfo:
     duration = float(data.get('format', {}).get('duration', video.get('duration', 0)))
     if not math.isfinite(duration) or duration <= 0:
         raise ValueError('Could not determine a positive source duration')
-    return MediaInfo(int(video['width']), int(video['height']), duration, audio is not None,
-                     video.get('codec_name', ''), audio.get('codec_name', '') if audio else '')
+    def stream_duration(stream):
+        try:
+            value = float(stream.get('duration', 'nan'))
+            return value if math.isfinite(value) and value > 0 else None
+        except (TypeError, ValueError):
+            return None
+    rotation = float(video.get('tags', {}).get('rotate', 0))
+    for side in video.get('side_data_list', []):
+        if 'rotation' in side:
+            rotation = float(side['rotation'])
+    width, height = int(video['width']), int(video['height'])
+    # Crop coordinates refer to the displayed frame after FFmpeg autorotation.
+    if round(rotation) % 180 == 90:
+        width, height = height, width
+    return MediaInfo(width, height, duration, audio is not None,
+                     video.get('codec_name', ''), audio.get('codec_name', '') if audio else '',
+                     stream_duration(video), stream_duration(audio) if audio else None)
 
 
 def section_bounds(clip: ClipSpec, buffer: float, duration: float | None) -> tuple[float, float]:
@@ -109,7 +129,7 @@ def acquire(clip: ClipSpec, settings: Settings, work_dir: Path, force: bool = Fa
         if not source.is_file():
             raise ValueError(f"Local source not found: {source.name}")
         info = probe(source)
-        section_bounds(clip, 0, info.duration)
+        section_bounds(clip, 0, min(info.duration, info.video_duration or info.duration))
         if not info.has_audio:
             raise ValueError('Source has no audio stream; this milestone requires audio')
         return SourceWindow(source, 0, clip.start, clip.end-clip.start, file_hash(source))
@@ -168,7 +188,7 @@ def extract_audio(window: SourceWindow, output: Path) -> Path:
     try:
         run(['ffmpeg', '-v', 'error', '-y', '-i', str(window.path),
              '-ss', str(window.trim_start), '-t', str(window.duration),
-             '-map', '0:a:0', '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le',
+             '-map', '0:a:0', '-vn', '-af', 'aresample=async=1:first_pts=0,apad', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le',
              str(temporary)])
         os.replace(temporary, output)
     finally:

@@ -31,7 +31,7 @@ class RenderTests(unittest.TestCase):
         clip = ClipSpec('one','source.mp4',2,8,'A','Hi')
         window = SourceWindow(Path('source.mp4'),0,2,6,'abc')
         from dataclasses import replace
-        with patch('clipmatch.render.tool_versions', return_value={}):
+        with patch('clipmatch.render.tool_versions', return_value={}), patch('clipmatch.render.resolve_fonts', return_value={}):
             key = render_key(clip,window,[],Settings(),False)
             self.assertNotEqual(key, render_key(replace(clip,hook='Changed'),window,[],Settings(),False))
             self.assertEqual(key, render_key(clip,window,[],Settings(device='cuda'),False))
@@ -57,3 +57,50 @@ class RenderTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     render_clip(clip,window,[],Settings(),output)
             self.assertEqual(output.read_bytes(),b'previous valid video')
+
+class CoverageTests(unittest.TestCase):
+    def test_anamorphic_facecam_normalizes_pixel_aspect_before_fitting(self):
+        graph=layout_filter((0,0,320,180),30)
+        self.assertIn('crop=320:180:0:0,scale=trunc(iw*sar/2)*2:ih,setsar=1,scale=1080:600',graph)
+
+    def test_audio_duration_cannot_mask_truncated_video(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d)
+            output=root/'final.mp4'
+            output.write_bytes(b'previous')
+            clip=ClipSpec('one','source.mp4',0,3,'A','Hi')
+            window=SourceWindow(root/'source.mp4',0,0,3,'a')
+            from types import SimpleNamespace as NS
+            results=[MediaInfo(640,360,4,True),NS(width=1080,height=1920,duration=3,has_audio=True,
+                      video_codec='h264',audio_codec='aac',video_duration=2,audio_duration=3)]
+            def fake(argv,**kwargs):
+                Path(argv[-1]).write_bytes(b'bad truncated video')
+                return ''
+            with patch('clipmatch.render.probe',side_effect=results),patch('clipmatch.render.run',side_effect=fake):
+                with self.assertRaisesRegex(ValueError,'verification'):
+                    render_clip(clip,window,[],Settings(),output)
+            self.assertEqual(output.read_bytes(),b'previous')
+
+class FontTests(unittest.TestCase):
+    def test_font_identity_changes_when_selected_font_file_changes(self):
+        from clipmatch.render import resolve_fonts
+        with tempfile.TemporaryDirectory() as d:
+            font=Path(d)/'fallback.ttf';font.write_bytes(b'font version one')
+            def fake(argv,**kwargs):
+                kwargs['diagnostics'].append(f'fontselect: (Arial, 700, 0) -> {font}, 0, Fallback')
+                return ''
+            with patch('clipmatch.render.run',side_effect=fake):
+                first=resolve_fonts('Arial','Hello')
+                font.write_bytes(b'font version two')
+                second=resolve_fonts('Arial','Hello')
+            self.assertNotEqual(first,second)
+            self.assertIn('fallback.ttf',first['selected'])
+
+    def test_missing_glyphs_are_reported_as_failure(self):
+        from clipmatch.render import resolve_fonts
+        def fake(argv,**kwargs):
+            kwargs['diagnostics'].append('fontselect: failed to find any fallback with glyph 0x754C')
+            return ''
+        with patch('clipmatch.render.run',side_effect=fake):
+            with self.assertRaisesRegex(ValueError,'glyph'):
+                resolve_fonts('Arial','界')

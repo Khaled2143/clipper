@@ -67,3 +67,25 @@ class MediaTests(unittest.TestCase):
                 self.assertEqual(args[args.index('-ss')+1], '2')
                 self.assertEqual(args[args.index('-t')+1], '10')
                 self.assertEqual(args[args.index('-ar')+1], '16000')
+
+class TimelineTests(unittest.TestCase):
+    def test_probe_uses_display_rotation_and_independent_stream_durations(self):
+        data={'format':{'duration':'4'},'streams':[
+            {'codec_type':'video','codec_name':'h264','width':640,'height':360,'duration':'2',
+             'side_data_list':[{'rotation':90}]},
+            {'codec_type':'audio','codec_name':'aac','duration':'4'}]}
+        with patch('clipmatch.media.run',return_value=json.dumps(data)):
+            info=probe(Path('rotated.mp4'))
+        self.assertEqual((info.width,info.height),(360,640))
+        self.assertEqual((info.video_duration,info.audio_duration),(2,4))
+
+    def test_wav_extraction_fills_leading_silence_and_timestamp_gaps(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d)
+            def fake(argv,**kwargs):
+                Path(argv[-1]).write_bytes(b'audio')
+                return ''
+            with patch('clipmatch.media.run',side_effect=fake) as child:
+                extract_audio(SourceWindow(root/'delayed.mp4',0,0,3,'a'),root/'audio.wav')
+            args=child.call_args.args[0]
+            self.assertIn('aresample=async=1:first_pts=0',args[args.index('-af')+1])

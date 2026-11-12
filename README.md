@@ -80,9 +80,9 @@ clips:
 - Each entry produces **its own video**, in spec order. No automatic concatenation.
 - Times refer to the original VOD, not the downloaded section. Numeric seconds also work; quote HH:MM:SS timestamps.
 - Local sources resolve relative to the spec file. Use an absolute Windows path in single quotes if preferred, e.g. `'D:\Recordings\stream.mp4'`.
-- `facecam_rect` is `[x, y, width, height]` in source pixels, not normalized coordinates. Bounds are checked against the source.
+- `facecam_rect` is `[x, y, width, height]` in displayed source pixels after autorotation, before correction for non-square pixels. Bounds are checked in that same coordinate system.
 - Without a crop: full frame over a blurred background. With a crop: facecam above fitted gameplay.
-- Keep hooks short (roughly 75 characters maximum, depending on wrapping). Keep labels short. Use truthful wording supported by the footage.
+- Keep hooks short (roughly 75 characters maximum, depending on wrapping). Labels must be at most 30 characters and are never silently truncated. Use truthful wording supported by the footage.
 - Unknown fields, duplicate IDs (including case-only duplicates), invalid times and invalid crops fail clearly.
 - Streamer handles are deliberately not populated: no handles have been verified, and this milestone uses explicit sources/labels.
 
@@ -151,7 +151,7 @@ ffprobe -v error -show_streams -show_format -of json renders\reaction_a.mp4
 ffmpeg -ss 0.2 -i renders\reaction_a.mp4 -frames:v 1 renders\reaction_a-frame.png
 ```
 
-Expect 1080×1920, H.264 video, AAC audio, and duration within 0.15 seconds of the selected window. Watch audio sync, text placement, first-frame hook, crop, and ending. Font rendering can vary by machine; requested fonts may be substituted by libass. Sidecars currently flag visual font review.
+Expect 1080×1920, H.264 video, AAC audio, and duration within 0.15 seconds of the selected window. Watch audio sync, text placement, first-frame hook, crop, and ending. Font rendering can vary by machine. A small libass preflight checks required glyphs, prints selected fonts, and records their identity in sidecars/cache keys. Missing fallback glyphs fail clearly. Visual layout review is still necessary.
 
 ## Limits and troubleshooting
 
@@ -163,3 +163,15 @@ Expect 1080×1920, H.264 video, AAC audio, and duration within 0.15 seconds of t
 - Keep renders/source sidecars private if source URLs contain access tokens; they preserve the source you supplied. Media errors avoid echoing raw downloader stderr.
 - Do not run overlapping jobs with the same output directory/clip IDs. There is no concurrent writer coordination in this milestone.
 - Full-VOD ingestion, candidate discovery, $40 cloud spending controls, queue/review page and automatic retention are future milestones, not included here.
+
+## Current implementation verification
+
+Implementation is on branch `milestone1-manual-render` in `.worktrees/manual-render` of the parent checkout. It has not been merged or published.
+
+On the development laptop, 33 unit/CLI regression checks pass; six generated-media integration tests are skipped because full FFmpeg and ffprobe are unavailable. The environment also blocks network package installation. No real rendered MP4, frame inspection, CUDA transcription, real VOD download, or Windows-native run has been verified. **Milestone 1 remains pending render verification.**
+
+An independent code review identified seven substantive issues. A single regression-test fix pass addressed source/output collisions, source provenance after optional clean-export failure, audio timeline normalization, bounded typography, font resolution/provenance, rotation/sample-aspect handling, and independent video/audio duration checks. Unit tests exercise those fixes; real audio/layout behavior remains blocked by the missing binaries.
+
+One minor optimization remains deferred: the same local VOD can be hashed more than once in a batch. This can slow repeated clips from a large recording but does not invalidate cache correctness.
+
+Implementation decisions: Git worktree fallback after the managed tool failed; locally available PyYAML used only inside the ignored verification venv; small original FFmpeg modules retained after reviewing an existing editor's modules. Production installation uses the declared normal dependencies. The tradeoffs are an extra checkout, environment differences still to test, and responsibility for maintaining the renderer.

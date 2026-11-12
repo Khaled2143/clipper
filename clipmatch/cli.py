@@ -9,7 +9,7 @@ from . import __version__
 from .cache import atomic_json, cache_valid, complete, fingerprint
 from .captions import overlay_events, write_captions
 from .media import acquire, extract_audio, preflight, probe, tool_versions
-from .render import render_clip, render_key, validate_crop
+from .render import render_clip, render_key, validate_crop, resolve_fonts
 from .spec import load_job
 from .transcribe import transcribe
 
@@ -17,6 +17,24 @@ from .transcribe import transcribe
 def render_job(spec: Path, config: Path | None, *, force: bool=False,
                clean: bool=False, no_captions: bool=False) -> int:
     settings, clips = load_job(spec,config)
+    # A destination must never replace any input, even a later clip's source.
+    sources = {Path(c.source).resolve() for c in clips
+               if not c.source.startswith(('http://', 'https://'))}
+    protected = sources | {spec.resolve()}
+    if config:
+        protected.add(config.resolve())
+    for c in clips:
+        destinations = [settings.output_dir / (c.id + suffix)
+                        for suffix in ('.mp4', '.ass', '.srt', '.json', '.manifest.json')]
+        if clean:
+            destinations += [settings.output_dir / (c.id + suffix)
+                             for suffix in ('.clean.mp4', '.clean.manifest.json')]
+        destinations += [settings.work_dir / c.id / name for name in
+                         ('audio.wav', 'audio.manifest.json', 'transcript.json',
+                          'transcript.manifest.json', 'section.mp4', 'section.manifest.json',
+                          'section.origin.json')]
+        if any(destination.resolve() in protected for destination in destinations):
+            raise ValueError(f'{c.id}: output/cache destination collides with a protected input')
     # Reject cheap, deterministic errors for the entire batch before downloading anything.
     for clip in clips:
         overlay_events(clip.hook,clip.label,clip.end-clip.start)
@@ -27,7 +45,7 @@ def render_job(spec: Path, config: Path | None, *, force: bool=False,
             validate_crop(clip.facecam_rect,info)
             if not info.has_audio:
                 raise ValueError(f'{clip.id}: source has no audio stream')
-            if clip.end > info.duration+.05:
+            if clip.end > min(info.duration, getattr(info, 'video_duration', None) or info.duration)+.05:
                 raise ValueError(f'{clip.id}: selected end exceeds source duration')
     failures=0
     for clip in clips:
@@ -38,12 +56,12 @@ def render_job(spec: Path, config: Path | None, *, force: bool=False,
             progress('acquire/validate selected window (reuse completed download when valid)')
             window = acquire(clip,settings,work,force)
             words=[]
-            warnings=['font_resolution_requires_visual_review', 'mixed_audio_speaker_attribution_unverified']
+            warnings=['layout_requires_visual_review', 'mixed_audio_speaker_attribution_unverified']
             transcript_provenance=None
             if not no_captions:
                 audio=work/'audio.wav'
                 manifest=work/'audio.manifest.json'
-                key=fingerprint(dict(stage='audio-v1',source=window.identity,trim=window.trim_start,
+                key=fingerprint(dict(stage='audio-v2',source=window.identity,trim=window.trim_start,
                                      duration=window.duration,tools=tool_versions()))
                 if force or not cache_valid(audio,manifest,key):
                     progress('extract selected-window audio')
@@ -63,7 +81,9 @@ def render_job(spec: Path, config: Path | None, *, force: bool=False,
             settings.output_dir.mkdir(parents=True,exist_ok=True)
             output=settings.output_dir/f'{clip.id}.mp4'
             manifest=output.with_suffix('.manifest.json')
-            key=render_key(clip,window,words,settings,False)
+            fonts=resolve_fonts(settings.font, clip.hook+' '+clip.label+' '+' '.join(w.text for w in words))
+            progress('resolved fonts: '+', '.join(fonts.get('selected', [])))
+            key=render_key(clip,window,words,settings,False,fonts)
             if force or not cache_valid(output,manifest,key):
                 progress('render 1080x1920 master and verify codecs/audio/duration')
                 info=render_clip(clip,window,words,settings,output)
@@ -77,25 +97,28 @@ def render_job(spec: Path, config: Path | None, *, force: bool=False,
             else:
                 output.with_suffix('.ass').unlink(missing_ok=True)
                 output.with_suffix('.srt').unlink(missing_ok=True)
+            def save_sidecar(selected_clean, clean_status):
+                atomic_json(output.with_suffix('.json'),dict(
+                    version=1,clipmatch=__version__,clip_id=clip.id,status='manual_render_unreviewed',
+                    source=dict(url_or_path=clip.source,identity=window.identity,start=clip.start,end=clip.end),
+                    hook=clip.hook,label=clip.label,facecam_rect=clip.facecam_rect,
+                    output=dict(path=output.name,**asdict(info)),
+                    clean_output=selected_clean.name if selected_clean else None, clean_export_status=clean_status,
+                    captions_enabled=not no_captions,transcription=transcript_provenance,fonts=fonts,
+                    tools=tool_versions(),warnings=warnings))
+            save_sidecar(None, 'pending_or_failed' if clean else 'not_requested')
             clean_output=None
             if clean:
                 clean_output=output.with_name(clip.id+'.clean.mp4')
                 clean_manifest=clean_output.with_suffix('.manifest.json')
-                clean_key=render_key(clip,window,[],settings,True)
+                clean_key=render_key(clip,window,[],settings,True,fonts)
                 if force or not cache_valid(clean_output,clean_manifest,clean_key):
                     progress('render clean CapCut export')
                     render_clip(clip,window,[],settings,clean_output,clean=True)
                     complete(clean_output,clean_manifest,clean_key,'render_clean',tool_versions())
                 else:
                     progress('clean export cache hit')
-            atomic_json(output.with_suffix('.json'),dict(
-                version=1,clipmatch=__version__,clip_id=clip.id,status='manual_render_unreviewed',
-                source=dict(url_or_path=clip.source,identity=window.identity,start=clip.start,end=clip.end),
-                hook=clip.hook,label=clip.label,facecam_rect=clip.facecam_rect,
-                output=dict(path=output.name,**asdict(info)),
-                clean_output=clean_output.name if clean_output else None,
-                captions_enabled=not no_captions,transcription=transcript_provenance,
-                tools=tool_versions(),warnings=warnings))
+            save_sidecar(clean_output, 'complete' if clean else 'not_requested')
             progress(f'ready for manual review: {output}')
         except (OSError,ValueError,RuntimeError) as exc:
             failures+=1

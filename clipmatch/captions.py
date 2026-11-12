@@ -1,6 +1,7 @@
 """Editable SRT plus safe ASS overlays and word-by-word highlighting."""
 from pathlib import Path
 import textwrap
+import unicodedata
 from .spec import Settings
 from .transcribe import Word, clean_words
 
@@ -24,7 +25,7 @@ def ass_document(events: list[str], settings: Settings) -> str:
 ScriptType: v4.00+
 PlayResX: 1080
 PlayResY: 1920
-WrapStyle: 2
+WrapStyle: 0
 ScaledBorderAndShadow: yes
 
 [V4+ Styles]
@@ -42,14 +43,28 @@ def event(start: float, end: float, style: str, text: str, layer: int=0) -> str:
     return f'Dialogue: {layer},{timestamp(start)},{timestamp(end)},{style},,0,0,0,,{text}'
 
 
+def fitted_size(text: str, maximum: int, width: int) -> int:
+    # Conservative em-width estimate; libass can still wrap within style margins.
+    units = sum(1.1 if unicodedata.east_asian_width(c) in ('W', 'F') or c in 'WM@#%'
+                else .4 if c.isspace() else .7 for c in text)
+    size = min(maximum, int(width / max(1, units)))
+    if size < 18:
+        raise ValueError('Text is too long to fit readably; shorten the hook/label/caption')
+    return size
+
+
 def overlay_events(hook: str, label: str, duration: float) -> list[str]:
-    # Limit font-relative width by wrapping and shrinking long user hooks.
+    if len(label) > 30:
+        raise ValueError('label must be at most 30 characters; it will not be truncated')
     lines = textwrap.wrap(escape_ass(hook), width=27)
     if len(lines) > 3:
         raise ValueError('Hook is too long to fit safely; use at most about 75 characters')
-    hook_text = r'\N'.join(lines)
+    size = min([52, 120 // max(1, len(lines))] + [fitted_size(line, 52, 800) for line in lines])
+    hook_text = r'{\fs' + str(size) + '}' + r'\N'.join(lines)
+    label_size = fitted_size(escape_ass(label), 42, 800)
+    label_text = r'{\fs' + str(label_size) + '}' + escape_ass(label)
     return [event(0, duration, 'Hook', hook_text, 1),
-            event(0, duration, 'Label', escape_ass(label[:30]), 1)]
+            event(0, duration, 'Label', label_text, 1)]
 
 
 def caption_events(words: list[Word], duration: float) -> list[str]:
@@ -71,12 +86,12 @@ def caption_events(words: list[Word], duration: float) -> list[str]:
             for i, member in enumerate(group):
                 # One long ASR token cannot overflow into platform UI.
                 safe = escape_ass(member.text)
-                if len(safe) > 24:
-                    safe = safe[:23]+'…'
                 pieces.append((r'{\c&H00FFFF&}' if i == active else r'{\c&HFFFFFF&}')+safe)
             end = min(word.end, group[active+1].start) if active+1<len(group) else word.end
             if end > word.start:
-                events.append(event(word.start, end, 'Caption', r'{\pos(490,1360)}'+' '.join(pieces)))
+                size = fitted_size(' '.join(w.text for w in group), 56, 760)
+                prefix = r'{\pos(490,1360)\fs' + str(size) + '}'
+                events.append(event(word.start, end, 'Caption', prefix+' '.join(pieces)))
     return events
 
 
