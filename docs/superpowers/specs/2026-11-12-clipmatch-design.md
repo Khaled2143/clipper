@@ -1,4 +1,6 @@
-# Clipmatch design — proposed for approval
+# Clipmatch design — approved
+
+Approved by the owner in conversation following design review. Milestone implementation remains gated by the agreed stop points.
 
 ## Intent and agreed scope
 
@@ -14,7 +16,7 @@ The repository is currently named clipper; the Python package and CLI will be cl
 2. Fork a complete editor such as auto-video-editor: potentially faster captions/layout work, but inherits assumptions, dependencies, and maintenance. Its advertised quality is unverified on the target footage.
 3. Packaged clipping service: Eklipse is an evaluation baseline, not an approved subscription. Source limits, external-creator imports, story-reaction quality, and automation need testing.
 
-Proposed selection: the thin custom workflow, evaluating existing editor components before duplicating them. The owner agreed to the content rubric; final architecture and this document still require approval. No dependencies beyond the original stack, purchases, cloud deployment, or paid calls are authorized by this design alone. Ask before adding dependencies as requested.
+Selected: the thin custom workflow, evaluating existing editor components before duplicating them. The owner approved this architecture and content rubric. No dependencies beyond the original stack, purchases, cloud deployment, or paid calls are authorized by this design alone. Ask before adding dependencies as requested.
 
 ## Quality model
 
@@ -80,7 +82,7 @@ Offline synthetic ffmpeg fixtures verify render mechanics; they cannot validate 
 5. Quality and usability: stronger duplicate checks, music/spoiler warnings, calibration reporting, clear errors, Windows/cloud setup and GPU notes. Core validation/security/errors needed by earlier milestones are implemented earlier.
 6. Optional enhancements: cross-stream scene matching and compilations only if they justify their cost. Original shingle/clustering/bleed requirements apply if this is activated later.
 
-After every milestone provide exact commands, expected artifacts, verification evidence, limitations, and wait for the owner's go-ahead. Final planning follows approval of this design; implementation has not begun.
+After every milestone provide exact commands, expected artifacts, verification evidence, limitations, and wait for the owner's go-ahead. Implementation planning follows this approved design; implementation had not begun at approval.
 
 ## Research references — checked November 12, 2026
 
