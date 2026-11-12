@@ -1,0 +1,15 @@
+version: 1
+clips:
+  - id: reaction_a
+    source: ./sample.mp4  # Replace with your recording or a supported VOD URL.
+    start: "00:00:02"
+    end: "00:00:08"
+    label: STREAMER
+    hook: "That confidence lasted one second"
+  - id: reaction_b
+    source: ./sample.mp4
+    start: "00:00:10"
+    end: "00:00:20"
+    label: STREAMER
+    hook: "Wait for the reaction"
+    # facecam_rect: [1500, 0, 420, 300]  # Source pixels; edit for your footage.

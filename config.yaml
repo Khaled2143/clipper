@@ -1,0 +1,12 @@
+version: 1
+settings:
+  model: small
+  device: auto
+  compute_type: auto
+  buffer_seconds: 2
+  crf: 20
+  preset: veryfast
+  fps: 30
+  font: Arial
+  work_dir: work
+  output_dir: renders

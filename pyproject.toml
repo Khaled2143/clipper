@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "clipmatch"
+version = "0.1.0"
+description = "Resumable manual vertical clips from selected VOD windows"
+requires-python = ">=3.11"
+dependencies = ["PyYAML>=6", "yt-dlp>=2025.1.15"]
+
+[project.optional-dependencies]
+transcription = ["faster-whisper>=1.1"]
+
+[project.scripts]
+clipmatch = "clipmatch.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["clipmatch*"]
