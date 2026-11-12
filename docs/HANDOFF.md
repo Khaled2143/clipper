@@ -6,7 +6,7 @@ Continue on branch **`milestone1-manual-render`**. The repository is named `clip
 
 **Milestone 1 is implemented but is not yet verified complete.** Full FFmpeg/ffprobe rendering tests and frame inspection could not run on the development laptop. Do not start milestone 2 or claim the renderer works until those checks pass and the owner gives the next go-ahead.
 
-The owner explicitly requested pushing this branch and handoff to GitHub. No merge to main is requested. Local commits use **Khaled Ahmed** and the existing GitHub noreply email, configured for this repository only. The laptop's global work identity was left unchanged.
+The owner explicitly requested pushing this branch and handoff to GitHub. The attempted push failed because this session could not resolve github.com; **remote publication remains pending**. Run `git push -u origin milestone1-manual-render` from this implementation checkout in an unrestricted terminal before using the Windows clone command below. No merge to main is requested. Local commits use **Khaled Ahmed** and the existing GitHub noreply email, configured for this repository only. The laptop's global work identity was left unchanged.
 
 ## Product decisions
 
