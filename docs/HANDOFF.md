@@ -4,9 +4,31 @@
 
 Continue on branch **`milestone1-manual-render`**. The repository is named `clipper`; the package/CLI is `clipmatch`.
 
-**Milestone 1 is implemented but is not yet verified complete.** Full FFmpeg/ffprobe rendering tests and frame inspection could not run on the development laptop. Do not start milestone 2 or claim the renderer works until those checks pass and the owner gives the next go-ahead.
+**Milestone 1 now passes synthetic rendering verification on Windows; real-footage validation and owner acceptance remain pending.** All 39 tests pass without skips, and both layouts have been rendered and visually inspected. Do not start milestone 2 until the owner gives the next go-ahead.
 
-The owner explicitly requested pushing this branch and handoff to GitHub. The attempted push failed because this session could not resolve github.com; **remote publication remains pending**. Run `git push -u origin milestone1-manual-render` from this implementation checkout in an unrestricted terminal before using the Windows clone command below. No merge to main is requested. Local commits use **Khaled Ahmed** and the existing GitHub noreply email, configured for this repository only. The laptop's global work identity was left unchanged.
+The original laptop push failed, but the Windows clone now contains `origin/milestone1-manual-render` at `1a03609`, including this handoff. The implementation branch is checked out locally. Live remote verification from the Windows agent session is blocked by network restrictions; do not infer that new continuation changes have been pushed. No merge to main is requested. Original laptop commits use **Khaled Ahmed** and the existing GitHub noreply email, configured for that repository only. The laptop's global work identity was left unchanged.
+
+## Windows continuation — November 13, 2026
+
+Checkout: `C:\Users\lordk\dev\personal\clipper\clipper`, branch `milestone1-manual-render`.
+
+- Created `.venv` with Python 3.11.5 and installed `.[transcription]` normally, using a workspace-local uv cache. Installed faster-whisper 1.2.1 and CTranslate2 4.9.0; one CUDA device is detected, but model initialization/inference is not yet verified.
+- The native Windows test run exposed a test-reader bug: `atomic_json` correctly writes UTF-8, but its test implicitly decoded with CP1252. Explicit UTF-8 decoding preserves the original Unicode assertion and fixes the failure; no application serialization change was needed.
+- Current suite: **39 passed, zero skips**, including all six media integration tests. CLI help and compilation pass. Test log: ignored `work/windows-tests.log`.
+- The owner installed Gyan.FFmpeg and copied its binaries to ignored `work/tools/ffmpeg-bin`, resolving the session access restriction. FFmpeg/ffprobe 9.0.2 pass the project's codec/filter preflight.
+- The rotation fixture's old metadata command produced no display matrix on FFmpeg 9. Updated the test to use `-display_rotation` when supported, retaining the old command for older binaries. The original display-dimension assertion remains intact. No production renderer change was needed.
+- Ran ignored `work/verify_samples.py`. Retained `renders/blur.mp4`, `renders/face.mp4`, clean exports, subtitle/source sidecars, ffprobe reports, and frames at 0, 0.2, 0.8, and 2.9 seconds under `work/windows-verification`. Both masters are 1080x1920 H.264/AAC with video and audio durations of exactly 3 seconds. Inspected first-frame hooks/labels and 0.8-second highlighted captions in both layouts; the red camera region is above fitted gameplay as intended. Arial-BoldMT resolves successfully.
+- Samples use generated tones and injected words, not actual speech recognition. The owner has no real footage prepared yet. Real transcription, remote section timing, subjective playback review, and milestone acceptance remain pending.
+
+To reproduce the synthetic checks, run from this checkout:
+
+```powershell
+$env:PATH = "$PWD\work\tools\ffmpeg-bin;" + $env:PATH
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+.\.venv\Scripts\python.exe work\verify_samples.py
+```
+
+Do not count skipped media tests as successful render verification. Continue the ordered steps below; milestone 2 remains gated on milestone 1 review.
 
 ## Product decisions
 
@@ -51,9 +73,9 @@ The owner explicitly requested pushing this branch and handoff to GitHub. The at
 
 With explicit `--config config.yaml`, paths are relative to that config directory. Without it, work/output defaults are relative to the spec directory. The root config is not automatically loaded.
 
-## Verification evidence and blockers
+## Original laptop verification evidence and blockers (historical)
 
-Latest available suite: **39 tests discovered: 33 passed, 6 skipped**. Compilation and CLI help also pass. The six skipped tests require full FFmpeg and ffprobe:
+Original laptop suite: **39 tests discovered: 33 passed, 6 skipped**. The Windows continuation above supersedes this result. The six formerly skipped tests require full FFmpeg and ffprobe:
 
 1. Both layouts, captions, clean exports, resume and changed hook.
 2. Force/source-change invalidation and interrupted transcription.
@@ -132,6 +154,8 @@ Also extract a frame at a known caption time and inspect both blur/facecam layou
 For CUDA, follow the current faster-whisper/CTranslate2 GPU documentation linked in README. Current upstream guidance described CUDA 12 cuBLAS/cuDNN 9; recheck against the actual installed versions. Auto uses CPU int8 when CUDA is unavailable/initialization fails; explicit `device: cuda` requires working CUDA. Rendering uses CPU libx264 currently.
 
 ## What to do next, in order
+
+Windows continuation has completed steps 1–3 below. Resume at step 4 when a real source is available; sample review can happen now using the retained files above.
 
 1. Install full tools/dependencies outside this restricted laptop session or on Windows.
 2. Run all 39 tests with **no media skips**; fix genuine failures with regression evidence.

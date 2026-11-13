@@ -75,5 +75,5 @@ class CacheTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / 'nested' / 'data.json'
             atomic_json(path, {'hello': '世界'})
-            self.assertEqual(json.loads(path.read_text()), {'hello': '世界'})
+            self.assertEqual(json.loads(path.read_text(encoding='utf-8')), {'hello': '世界'})
             self.assertEqual(list(path.parent.glob('*.tmp')), [])

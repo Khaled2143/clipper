@@ -158,8 +158,13 @@ class RenderIntegrationTests(unittest.TestCase):
     def test_rotated_and_anamorphic_sources_render(self):
         rotated=self.root/'rotated.mp4'
         anamorphic=self.root/'anamorphic.mp4'
-        subprocess.run(['ffmpeg','-v','error','-y','-i',str(self.source),'-c','copy',
-                        '-metadata:s:v:0','rotate=90',str(rotated)],check=True)
+        help_text = subprocess.run(['ffmpeg','-hide_banner','-h','full'],check=True,
+                                   capture_output=True,text=True,encoding='utf-8').stdout
+        # New FFmpeg versions no longer turn a rotate tag into a display matrix.
+        rotation_args = (['-display_rotation','90','-i',str(self.source),'-c','copy']
+                         if '-display_rotation' in help_text else
+                         ['-i',str(self.source),'-c','copy','-metadata:s:v:0','rotate=90'])
+        subprocess.run(['ffmpeg','-v','error','-y',*rotation_args,str(rotated)],check=True)
         subprocess.run(['ffmpeg','-v','error','-y','-i',str(self.source),'-vf','setsar=2',
                         '-c:v','libx264','-c:a','copy',str(anamorphic)],check=True)
         self.assertEqual((probe(rotated).width,probe(rotated).height),(360,640))
