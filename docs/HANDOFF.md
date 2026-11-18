@@ -4,20 +4,22 @@
 
 **Next session starts with the first live Twitch-to-Discord clip.** The worker is installed in the Windows checkout on branch `milestone1-manual-render`. This branch contains both the new live worker and the earlier manual vertical renderer.
 
-**GitHub sync at handoff.** The November 18 session could read GitHub, but its outbound push was blocked. GitHub still reported `1a03609` for this branch. The Windows checkout holds the verified renderer commit and the worker commit. To publish them from a signed-in PowerShell session:
+GitHub has the live worker at commit `9ededb0` on `milestone1-manual-render`. The Twitch app `Kayd21ChatClipper` is registered with callback `http://localhost:17563/callback`. All four settings are populated in the home checkout. Twitch sign-in was started, but no local refresh token was present at handoff.
+
+On the work PC, clone this branch, open PowerShell in the clone, and run:
 
 ```powershell
-git -C "C:\Users\lordk\dev\personal\clipper\clipper" push origin milestone1-manual-render
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[live]"
+Copy-Item .env.example .env
+notepad .env
 ```
 
-1. Register a confidential Twitch app with the exact callback `http://localhost:17563/callback`. Create a Discord webhook in the channel where you want the clips. [Account setup](../README.md#connect-your-accounts-locally)
-2. In the checkout's local `.env`, fill in `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `DISCORD_WEBHOOK_URL`, and `CHANNELS`. Start with one busy channel where your account can create clips. A fresh clone includes the template in `.env.example`.
-3. Sign in, then start the watcher from PowerShell.
+Restore the existing Twitch client ID, client secret, Discord webhook URL and channel list privately. Save the file. Run the following commands in order, completing browser approval on the work PC before starting the watcher:
 
 ```powershell
-cd C:\Users\lordk\dev\personal\clipper\clipper
-.\.venv\Scripts\clipmatch-live.exe authorize
-.\.venv\Scripts\clipmatch-live.exe watch
+.\.venv\Scripts\python.exe -m clipmatch.live authorize
+.\.venv\Scripts\python.exe -m clipmatch.live watch
 ```
 
 Allow five minutes of observed live chat for warmup. Look for `spike`, `clip_requested`, then `clip_result` with `delivered: true` in the terminal. Open the link in Discord, check whether the clip caught the setup and payoff, and record the time from spike to delivery. The initial target is 30 seconds. The default trigger is 20 messages in 10 seconds and at least three times the channel's recent average, with a 90-second cooldown.
