@@ -1,8 +1,50 @@
 # clipmatch
 
-A local CLI for turning explicitly selected VOD windows into independent vertical clips. One source moment can become several separate videos. This is the **manual-render milestone**; discovery, chat analysis, AI selection/judging, cloud jobs and cross-stream matching are not implemented yet.
+Clipmatch can watch live Twitch chat and send a clip to Discord when a channel's message rate spikes. The manual renderer creates vertical videos from selected VOD windows.
 
-Every result is `manual_render_unreviewed`. Watch it before posting.
+## Live chat-spike worker
+
+One background process monitors the channels in `CHANNELS` using your Twitch account. It asks Twitch for a 60-second clip when a 10-second window reaches both 20 messages and three times the channel's recent average. After five minutes of observed chat it can trigger, using up to ten minutes of history. Each channel has its own 90-second cooldown. Discord gets the confirmed public link, message count, baseline, and top words or emotes. Twitch hosts the video.
+
+### Connect your accounts locally
+
+1. Register a **Confidential** Twitch application. Enter **`http://localhost:17563/callback`** as an OAuth redirect URL. Copy the client ID and generate a client secret. [Twitch developer console](https://dev.twitch.tv/console/apps)
+2. In the target Discord channel, open **Edit Channel → Integrations → Webhooks** and create or select a webhook. Copy its URL.
+3. From the folder containing `pyproject.toml`, install the live extra into a Python 3.11+ virtual environment. The commands below use PowerShell. Skip the first line if the project already has a virtual environment.
+
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[live]"
+if (!(Test-Path .env)) { Copy-Item .env.example .env }
+notepad .env
+```
+
+Fill in `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `DISCORD_WEBHOOK_URL`, and the comma-separated `CHANNELS` list. Run the following on the computer where you will open the browser.
+
+```powershell
+.\.venv\Scripts\python.exe -m clipmatch.live authorize
+.\.venv\Scripts\python.exe -m clipmatch.live watch
+```
+
+Sign in once with an account allowed to clip the channels you chose. The default grant includes `clips:edit` and `user:read:chat`. For authenticated IRC fallback during a chat-service outage, run `authorize --irc-fallback` to also grant `chat:read`. The worker reads and refreshes its saved token automatically. Local credentials and state live in the ignored `.env` and `.clipbot/` paths.
+
+Keep the terminal running to watch live channels. You can start midway through a broadcast. The worker checks current live status, logs a JSON line for each completed bucket, and starts a fresh warmup after a gap in chat coverage. Edit the optional settings in `.env.example` in your own `.env` and restart to tune the detector. The default 20-message floor means quiet channels may rarely trigger.
+
+Chat messages arrive over EventSub. For watchlists of up to five channels the worker also subscribes to live-status events. For longer lists it checks live status in batches every 30 seconds so those status subscriptions do not exhaust Twitch's WebSocket allowance. [Twitch subscription limits](https://dev.twitch.tv/docs/eventsub/manage-subscriptions/#subscription-limits)
+
+### Run on Railway
+
+Deploy this repository as a **single worker** from the directory containing `railway.toml`. Attach a volume at `/data`. In Railway Variables set the same client ID, secret, channels, and Discord webhook, plus `TWITCH_REFRESH_TOKEN` seeded privately from the local `.clipbot/refresh-token` file. Stop the local watcher before transferring the current token. The worker uses Railway's volume mount path for its rotated token, pending confirmations, and cooldowns. The repository supplies the container, start command, and restart policy. The worker uses outbound connections and requires no public domain.
+
+### Check the first live run
+
+Watch for the `watching`, `online`, `bucket`, `spike`, `clip_requested`, and `clip_result` log events. An `offline` line pauses counting for that channel. A confirmed Discord post includes a `clips.twitch.tv` link. If Twitch rejects clipping, the worker reports the channel and reason. If Discord delivery itself fails, the worker logs the result and the confirmed URL. A disconnect during a POST can leave delivery uncertain.
+
+For live acceptance, run the worker for 24 hours including a disconnect, measure time from spike to Discord (target 30 seconds), and watch the clips to check that the setup and payoff made it in. Twitch confirmation can take up to 60 seconds. [Twitch Clips API](https://dev.twitch.tv/docs/api/reference/clips)
+
+## Manual vertical renderer
+
+Every manual render is `manual_render_unreviewed`. Watch it before posting.
 
 For current progress, verification blockers, and Windows continuation steps, read [the handoff](docs/HANDOFF.md).
 
@@ -135,10 +177,10 @@ Import the clean MP4 and matching SRT into CapCut Desktop to correct text and ch
 
 ## Offline verification
 
-Install only the base package if speech recognition isn't needed for development:
+Install the live extra to run the full suite. The live integration test uses local Twitch and Discord simulators and runs without credentials.
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -e .
+.\.venv\Scripts\python.exe -m pip install -e ".[live]"
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
@@ -164,9 +206,9 @@ Expect 1080×1920, H.264 video, AAC audio, and duration within 0.15 seconds of t
 - Review captions for slang/names, hallucinations and overlapping voices. No AI judge, spoiler check, music-risk detection or publication approval is active yet.
 - Keep renders/source sidecars private if source URLs contain access tokens; they preserve the source you supplied. Media errors avoid echoing raw downloader stderr.
 - Do not run overlapping jobs with the same output directory/clip IDs. There is no concurrent writer coordination in this milestone.
-- Full-VOD ingestion, candidate discovery, $40 cloud spending controls, queue/review page and automatic retention are future milestones, not included here.
+- Full-VOD ingestion, offline candidate discovery, cloud spending controls, a review page and automatic retention are future milestones.
 
-## Current implementation verification
+## Manual renderer milestone verification
 
 Implementation is on branch `milestone1-manual-render`; on the original laptop its checkout is `.worktrees/manual-render` of the parent checkout. It has not been merged into main.
 

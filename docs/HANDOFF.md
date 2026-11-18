@@ -1,12 +1,36 @@
 # Clipmatch handoff
 
-## Read this first
+## Resume here — November 18, 2026
 
-Continue on branch **`milestone1-manual-render`**. The repository is named `clipper`; the package/CLI is `clipmatch`.
+**Next session starts with the first live Twitch-to-Discord clip.** The worker is installed in the Windows checkout on branch `milestone1-manual-render`. This branch contains both the new live worker and the earlier manual vertical renderer.
 
-**Milestone 1 now passes synthetic rendering verification on Windows; real-footage validation and owner acceptance remain pending.** All 39 tests pass without skips, and both layouts have been rendered and visually inspected. Do not start milestone 2 until the owner gives the next go-ahead.
+**GitHub sync at handoff.** The November 18 session could read GitHub, but its outbound push was blocked. GitHub still reported `1a03609` for this branch. The Windows checkout holds the verified renderer commit and the worker commit. To publish them from a signed-in PowerShell session:
 
-The original laptop push failed, but the Windows clone now contains `origin/milestone1-manual-render` at `1a03609`, including this handoff. The implementation branch is checked out locally. Live remote verification from the Windows agent session is blocked by network restrictions; do not infer that new continuation changes have been pushed. No merge to main is requested. Original laptop commits use **Khaled Ahmed** and the existing GitHub noreply email, configured for that repository only. The laptop's global work identity was left unchanged.
+```powershell
+git -C "C:\Users\lordk\dev\personal\clipper\clipper" push origin milestone1-manual-render
+```
+
+1. Register a confidential Twitch app with the exact callback `http://localhost:17563/callback`. Create a Discord webhook in the channel where you want the clips. [Account setup](../README.md#connect-your-accounts-locally)
+2. In the checkout's local `.env`, fill in `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `DISCORD_WEBHOOK_URL`, and `CHANNELS`. Start with one busy channel where your account can create clips. A fresh clone includes the template in `.env.example`.
+3. Sign in, then start the watcher from PowerShell.
+
+```powershell
+cd C:\Users\lordk\dev\personal\clipper\clipper
+.\.venv\Scripts\clipmatch-live.exe authorize
+.\.venv\Scripts\clipmatch-live.exe watch
+```
+
+Allow five minutes of observed live chat for warmup. Look for `spike`, `clip_requested`, then `clip_result` with `delivered: true` in the terminal. Open the link in Discord, check whether the clip caught the setup and payoff, and record the time from spike to delivery. The initial target is 30 seconds. The default trigger is 20 messages in 10 seconds and at least three times the channel's recent average, with a 90-second cooldown.
+
+### Verified before handoff
+
+The full Windows suite passed **88 tests with zero skips** with FFmpeg and ffprobe on PATH. The end-to-end test uses local Twitch and Discord simulators to exercise a stream already live at startup, a chat spike, a clip request, delayed confirmation, and delivery of the public URL. Other tests cover dropped connections, duplicate events, token rotation, and cooldown persistence.
+
+### Remaining live checks
+
+Account authorization, real clip timing, and delivery to the target Discord channel are pending. The Docker daemon was unavailable during implementation. After checking one real clip locally, stop the local watcher and deploy a single Railway worker with a volume at `/data`. Verify the container build, then run for 24 hours including a disconnect and check for duplicate clips across recovery. [Railway setup](../README.md#run-on-railway)
+
+The sections below record the **earlier manual-render milestone**. Its real-footage review is a separate outstanding task. [Live worker implementation plan](superpowers/plans/2026-11-18-chat-spike-worker.md)
 
 ## Windows continuation — November 13, 2026
 
