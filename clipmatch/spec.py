@@ -1,9 +1,18 @@
 """Strict manual-job configuration; source times always refer to the original VOD."""
-from dataclasses import dataclass, fields, replace
+from dataclasses import dataclass, fields
 import math
 from pathlib import Path
 import re
 from urllib.parse import urlsplit
+
+
+Rect = tuple[int, int, int, int]
+
+
+@dataclass(frozen=True)
+class LayoutSegment:
+    start: float
+    facecam_rect: Rect | None
 
 
 @dataclass(frozen=True)
@@ -14,7 +23,8 @@ class ClipSpec:
     end: float
     label: str
     hook: str
-    facecam_rect: tuple[int, int, int, int] | None = None
+    facecam_rect: Rect | None = None
+    layout_segments: tuple[LayoutSegment, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -74,6 +84,31 @@ def _path(value, root):
     return (root / path).resolve() if not path.is_absolute() else path.resolve()
 
 
+def _rect(raw):
+    if raw is None:
+        return None
+    if (not isinstance(raw, (list, tuple)) or len(raw) != 4
+            or any(type(n) is not int for n in raw)
+            or raw[0] < 0 or raw[1] < 0 or raw[2] <= 0 or raw[3] <= 0):
+        raise ValueError("facecam_rect must be [x, y, positive_width, positive_height]")
+    return tuple(raw)
+
+
+def _layout_segments(raw, duration):
+    if not isinstance(raw, list) or not raw:
+        raise ValueError("layout_segments must be a nonempty list")
+    segments = []
+    for item in raw:
+        if not isinstance(item, dict) or set(item) != {'start', 'facecam_rect'}:
+            raise ValueError("Each layout segment needs start and facecam_rect")
+        t = item['start']
+        if (type(t) not in (int, float) or not 0 <= t < duration
+                or (t <= segments[-1].start if segments else t != 0)):
+            raise ValueError("Segment starts must increase from zero within the selected edit")
+        segments.append(LayoutSegment(float(t), _rect(item['facecam_rect'])))
+    return tuple(segments)
+
+
 def parse_job(data: dict, root: Path, config: dict | None = None,
               config_root: Path | None = None) -> tuple[Settings, list[ClipSpec]]:
     _unknown(data, {'version', 'settings', 'clips'}, 'job')
@@ -93,8 +128,8 @@ def parse_job(data: dict, root: Path, config: dict | None = None,
     for name in ('output_dir', 'work_dir'):
         options[name] = _path(options.get(name, 'renders' if name == 'output_dir' else 'work'), destination_root)
     settings = Settings(**options)
-    if settings.layout not in ("manual", "stacked"):
-        raise ValueError("layout must be manual or stacked")
+    if settings.layout not in ("manual", "stacked", "adaptive"):
+        raise ValueError("layout must be manual, stacked, or adaptive")
     for name, low, high in [('crf', 0, 51), ('fps', 1, 60)]:
         value = getattr(settings, name)
         if type(value) is not int or not low <= value <= high:
@@ -120,7 +155,7 @@ def parse_job(data: dict, root: Path, config: dict | None = None,
     for raw in raw_clips:
         _unknown(raw, {f.name for f in fields(ClipSpec)}, 'clip')
         required = {'id', 'source', 'start', 'end', 'label'}
-        required.add('facecam_rect' if settings.layout == 'stacked' else 'hook')
+        required.add({'manual': 'hook', 'stacked': 'facecam_rect', 'adaptive': 'layout_segments'}[settings.layout])
         if not required <= raw.keys():
             raise ValueError(f"Missing clip fields: {', '.join(sorted(required - raw.keys()))}")
         name = _text(raw['id'], 'id')
@@ -139,20 +174,22 @@ def parse_job(data: dict, root: Path, config: dict | None = None,
         start, end = seconds(raw['start']), seconds(raw['end'])
         if end <= start:
             raise ValueError("end must be after start")
-        rect = raw.get('facecam_rect')
-        if rect is not None:
-            if (not isinstance(rect, (list, tuple)) or len(rect) != 4
-                    or any(type(n) is not int for n in rect)
-                    or rect[0] < 0 or rect[1] < 0 or rect[2] <= 0 or rect[3] <= 0):
-                raise ValueError("facecam_rect must be [x, y, positive_width, positive_height]")
-            rect = tuple(rect)
+        rect = _rect(raw.get('facecam_rect'))
+        segments = ()
+        if settings.layout != 'adaptive' and 'layout_segments' in raw:
+            raise ValueError("layout_segments requires the adaptive layout")
         if settings.layout == 'stacked':
             if rect is None or raw.get('hook', '') != '':
                 raise ValueError("The stacked layout requires facecam_rect and no hook.")
             hook = ''
+        elif settings.layout == 'adaptive':
+            if rect is not None or raw.get('hook', '') != '':
+                raise ValueError("The adaptive layout takes per-segment facecam_rect and no hook")
+            hook = ''
+            segments = _layout_segments(raw['layout_segments'], end - start)
         else:
             hook = _text(raw['hook'], 'hook')
-        clips.append(ClipSpec(name, source, start, end, _text(raw['label'], 'label'), hook, rect))
+        clips.append(ClipSpec(name, source, start, end, _text(raw['label'], 'label'), hook, rect, segments))
     return settings, clips
 
 

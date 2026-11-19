@@ -36,7 +36,7 @@ def render_job(spec: Path, config: Path | None, *, force: bool=False,
     if config:
         protected.add(config.resolve())
     for c in clips:
-        if send_finished and c.facecam_rect is None:
+        if send_finished and settings.layout != 'adaptive' and c.facecam_rect is None:
             raise ValueError(f"{c.id}: set facecam_rect for the finished channel's facecam-over-gameplay layout.")
         destinations = [settings.output_dir / (c.id + suffix)
                         for suffix in ('.mp4', '.ass', '.srt', '.json', '.manifest.json')]
@@ -59,6 +59,8 @@ def render_job(spec: Path, config: Path | None, *, force: bool=False,
         if not clip.source.startswith(('http://','https://')):
             info = probe(Path(clip.source))
             validate_crop(clip.facecam_rect,info)
+            for segment in clip.layout_segments:
+                validate_crop(segment.facecam_rect, info)
             if not info.has_audio:
                 raise ValueError(f'{clip.id}: source has no audio stream')
             if clip.end > min(info.duration, getattr(info, 'video_duration', None) or info.duration)+.05:
@@ -125,6 +127,8 @@ def render_job(spec: Path, config: Path | None, *, force: bool=False,
                     tools=tool_versions(),warnings=warnings)
                 if add_provenance is not None:
                     add_provenance(data)
+                if settings.layout == 'adaptive':
+                    data['layout_segments'] = [asdict(segment) for segment in clip.layout_segments]
                 atomic_json(output.with_suffix('.json'), data)
             clean_output=None
             if clean:

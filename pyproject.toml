@@ -12,7 +12,7 @@ dependencies = ["PyYAML>=6", "yt-dlp>=2025.1.15"]
 [project.optional-dependencies]
 # faster-whisper's audio reader uses av.open(metadata_errors=...), removed in PyAV 19.
 transcription = ["faster-whisper>=1.1", "av<19"]
-live = ["aiohttp>=3.10,<4", "python-dotenv>=1,<2"]
+live = ["aiohttp>=3.10,<4", "python-dotenv>=1,<2", "numpy>=1.24,<3", "onnxruntime>=1.17,<2", "regex>=2024.11.6"]
 
 [project.scripts]
 clipmatch = "clipmatch.cli:main"
@@ -22,4 +22,4 @@ clipmatch-live = "clipmatch.live:main"
 include = ["clipmatch*"]
 
 [tool.setuptools.package-data]
-clipmatch = ["layouts.json"]
+clipmatch = ["layouts.json", "models/*.onnx", "models/LICENSE.YuNet"]

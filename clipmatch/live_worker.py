@@ -41,19 +41,30 @@ class WorkerConfig:
     state_dir: Path
     settings: SpikeSettings
     finish_clips: bool = False
+    discord_delivery: bool = True
+    deliver_finished: bool = True
+    public_posting: bool = False
+    discord_watch_alerts: bool | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]):
         channels = tuple(dict.fromkeys(s.strip().lower() for s in required(env, "CHANNELS").split(",")))
         if any(not re.fullmatch(r"[a-z0-9_]{1,25}", name) for name in channels):
             raise ValueError("CHANNELS must be a comma-separated list of Twitch logins.")
-        webhook = discord_webhook_url(required(env, "DISCORD_WEBHOOK_URL"), "DISCORD_WEBHOOK_URL")
-        finished = env.get("DISCORD_FINISHED_WEBHOOK_URL", "").strip()
+        discord = env.get("DISCORD_CLIP_DELIVERY", "1").strip().lower() not in {"0", "false", "no"}
+        alerts_setting = env.get("DISCORD_WATCH_ALERTS")
+        alerts = None if alerts_setting is None else alerts_setting.strip().lower() in {"1", "true", "yes"}
+        posting = env.get("PUBLIC_POSTING_ENABLED", "").strip().lower() in {"1", "true", "yes"}
+        webhook = (discord_webhook_url(required(env, "DISCORD_WEBHOOK_URL"), "DISCORD_WEBHOOK_URL")
+                   if discord or alerts else "")
+        finished = env.get("DISCORD_FINISHED_WEBHOOK_URL", "").strip() if discord else ""
         if finished:
             discord_webhook_url(finished, "DISCORD_FINISHED_WEBHOOK_URL")
         return cls(required(env, "TWITCH_CLIENT_ID"), required(env, "TWITCH_CLIENT_SECRET"),
                    env.get("TWITCH_REFRESH_TOKEN", "").strip(), webhook, channels,
-                   state_directory(env), SpikeSettings.from_env(env), finish_clips=bool(finished))
+                   state_directory(env), SpikeSettings.from_env(env), finish_clips=bool(finished) or posting,
+                   discord_delivery=discord, deliver_finished=bool(finished), public_posting=posting,
+                   discord_watch_alerts=alerts)
 
 
 class ClipState:
@@ -96,10 +107,13 @@ class ClipState:
 
 class Worker:
     def __init__(self, api, session, webhook, channels, settings, state, *,
-                 clock=time.monotonic, wall=time.time, render_queue=None):
+                 clock=time.monotonic, wall=time.time, render_queue=None, discord_delivery=True,
+                 discord_watch_alerts=None):
         self.api = api
         self.session = session
         self.webhook = webhook
+        self.discord_delivery = discord_delivery
+        self.discord_watch_alerts = discord_delivery if discord_watch_alerts is None else discord_watch_alerts
         self.channels = channels
         self.settings = settings
         self.state = state
@@ -138,6 +152,18 @@ class Worker:
     def pause(self, channel):
         self.detectors.pop(channel, None)
 
+    def announce_watchlist(self):
+        async def announce():
+            channels = list(self.channels.values())
+            delivered = True
+            for start in range(0, len(channels), 60):
+                names = ", ".join(channels[start:start + 60])
+                sent = await self._post("watcher", f"Tracking these Twitch channels: {names}", watch_status=True)
+                delivered = delivered and sent
+            log("discord_watchlist", channels=channels, delivered=delivered)
+
+        self._spawn(announce())
+
     def live(self, channel, online):
         login = self.channels[channel]
         previous = self.status.get(channel)
@@ -149,7 +175,7 @@ class Worker:
         if previous != online:
             log("online" if online else "offline", channel=login)
             notice = "live — watching chat for clips." if online else "offline — chat monitoring paused."
-            self._spawn(self._post(login, f"[{login}] {notice}"))
+            self._spawn(self._post(login, f"[{login}] {notice}", watch_status=True))
 
     def channel_error(self, channel, reason):
         login = self.channels.get(channel, channel)
@@ -157,7 +183,7 @@ class Worker:
         now = self.clock()
         if now - self.last_alert.get((channel, reason), float("-inf")) >= 300:
             self.last_alert[channel, reason] = now
-            self._spawn(self._post(login, f"[{login}] {reason}"))
+            self._spawn(self._post(login, f"[{login}] {reason}", watch_status=True))
 
     def chat(self, channel, event):
         detector = self.detectors.get(channel)
@@ -189,7 +215,10 @@ class Worker:
             text += "\nTop chat: " + ", ".join(word[:80] for word in bucket.top)
         return text
 
-    async def _post(self, login, message):
+    async def _post(self, login, message, *, watch_status=False):
+        enabled = self.discord_watch_alerts if watch_status else self.discord_delivery
+        if not enabled:
+            return False
         try:
             await send_discord(self.session, self.webhook, message)
         except ApiError as exc:

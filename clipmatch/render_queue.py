@@ -31,6 +31,7 @@ class RenderQueue:
     def __init__(self, db: sqlite3.Connection, directory: Path):
         self.db = db
         self.directory = directory.resolve()
+        self.deliver_finished = True
         with db:
             db.execute("""
                 CREATE TABLE IF NOT EXISTS render_jobs (
@@ -103,10 +104,11 @@ class RenderQueue:
     async def _finish(self, job, log):
         clip_id, channel, url, attempts = job
         log("render_started", channel=channel, clip_id=clip_id, attempt=attempts)
+        destination = [] if self.deliver_finished else ["--render-only", "--prepare-copy"]
         try:
             child = await asyncio.create_subprocess_exec(
                 sys.executable, "-m", "clipmatch.finish_clip", "--state-dir", str(self.directory),
-                "--channel", channel, "--clip-id", clip_id, "--url", url)
+                "--channel", channel, "--clip-id", clip_id, "--url", url, *destination)
         except OSError:
             code = 75  # The child never started, so no upload could have taken place.
         else:

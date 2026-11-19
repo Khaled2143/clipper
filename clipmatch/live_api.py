@@ -19,9 +19,10 @@ REQUIRED_SCOPES = {"user:read:chat", "clips:edit"}
 
 
 class ApiError(RuntimeError):
-    def __init__(self, status: int, message: str, *, code: int | None = None):
+    def __init__(self, status: int, message: str, *, code: int | None = None, retry_after: float | None = None):
         self.status = status
         self.code = code
+        self.retry_after = retry_after
         super().__init__(message)
 
 
@@ -111,6 +112,9 @@ async def _request(session, service, method, url, *, attempts=3, bucket=None, ti
                     body = await response.json(content_type=None)
                 except (ValueError, UnicodeError):
                     body = None
+        except aiohttp.ClientConnectorError:
+            # Connecting failed before the request could reach the service.
+            raise ApiError(0, f"{service} connection failed", retry_after=60) from None
         except (aiohttp.ClientError, TimeoutError):
             raise ApiError(0, f"{service} connection failed") from None
 
@@ -132,7 +136,8 @@ async def _request(session, service, method, url, *, attempts=3, bucket=None, ti
         if creating_clip:
             raise ApiError(status, _clip_error(status, error_body))
         code = error_body.get("code")
-        raise ApiError(status, f"{service} returned HTTP {status}", code=code if type(code) is int else None)
+        raise ApiError(status, f"{service} returned HTTP {status}", code=code if type(code) is int else None,
+                       retry_after=_retry_delay(headers, error_body) if status == 429 else None)
 
 
 def _rows(body):
@@ -315,6 +320,8 @@ def discord_webhook_url(value: str, setting: str) -> str:
     return value
 
 
-async def send_discord(session, webhook_url: str, message: str) -> None:
-    await _request(session, "Discord", "POST", webhook_url, attempts=2, params={"wait": "true"},
-                   json={"content": message, "allowed_mentions": {"parse": []}})
+async def send_discord(session, webhook_url: str, message: str, *, attempts=2) -> str | None:
+    body = await _request(session, "Discord", "POST", webhook_url, attempts=attempts, params={"wait": "true"},
+                          json={"content": message, "allowed_mentions": {"parse": []}})
+    message_id = body.get("id")
+    return message_id if isinstance(message_id, str) and re.fullmatch("[0-9]{1,20}", message_id) else None

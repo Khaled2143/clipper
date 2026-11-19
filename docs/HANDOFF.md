@@ -1,5 +1,10 @@
 # Clipmatch handoff
 
+## Open layout fixes for finished videos — November 19, 2026
+
+- **Fix the top crop.** In the YourRAGEGaming clothing-menu clip, the top panel shows the “Tactical Cargo Cutoffs” menu while the bottom panel shows the character. Both panels are crops of the game. Use the stacked layout only when the top crop frames the streamer and the bottom panel shows separate content. When only the game is visible, show it once and keep the menu and character in frame. [YourRAGEGaming screenshot](handoff-images/yourragegame-menu.png)
+- **Switch layouts when gameplay cuts away.** In the Agent00 example, the top panel shows a close-up of his sleeve while the bottom shows the same camera shot. Show one view with his face in frame for the whole camera-only segment, even if it lasts just a second. When gameplay and facecam return together, resume the split. Check both transitions in a finished clip. [Agent00 screenshot](handoff-images/agent00-camera-only.png)
+
 ## Start here — shorter finished edits, November 18, 2026
 
 The Windows checkout on `milestone1-manual-render` now cuts finished uploads from the best landscape Twitch source. For new triggers the watcher saves when chat started rising relative to the successful clip request. The finisher considers that timing alongside changes in the game, facecam and audio. It keeps the channel label and skips generated speech captions. A source with little evidence gets a wider cut.

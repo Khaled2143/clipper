@@ -3,3 +3,6 @@
 !clipmatch/
 !clipmatch/*.py
 !clipmatch/layouts.json
+!clipmatch/models/
+!clipmatch/models/*.onnx
+!clipmatch/models/LICENSE.YuNet

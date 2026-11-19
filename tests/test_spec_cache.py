@@ -63,6 +63,27 @@ class SpecTests(unittest.TestCase):
         self.assertEqual(settings.output_dir, config.parent / 'renders')
         self.assertEqual(clips[0].source, str(self.root / 'a.mp4'))
 
+    def test_adaptive_segments_use_edit_relative_seconds_and_verified_crops(self):
+        clip = {k: v for k, v in self.clip.items() if k != 'hook'}
+        segments = [dict(start=0, facecam_rect=None), dict(start=1.25, facecam_rect=[2, 4, 32, 24])]
+        _, (parsed,) = self.parse([{**clip, 'layout_segments': segments}], settings={'layout': 'adaptive'})
+        self.assertEqual(parsed.hook, '')
+        self.assertEqual([(s.start, s.facecam_rect) for s in parsed.layout_segments],
+                         [(0, None), (1.25, (2, 4, 32, 24))])
+        for invalid in ([], [{'start': 0}], [dict(start=1, facecam_rect=None)],
+                        [dict(start=False, facecam_rect=None)], [dict(start='0', facecam_rect=None)],
+                        [segments[0], dict(start=6, facecam_rect=None)],
+                        [segments[0], dict(start=float('nan'), facecam_rect=None)],
+                        [segments[0], segments[1], segments[1]],
+                        [dict(start=0, facecam_rect=[0, 0, -2, 2])]):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                self.parse([{**clip, 'layout_segments': invalid}], settings={'layout': 'adaptive'})
+        for invalid in (dict(hook='Hello'), dict(facecam_rect=[0, 0, 8, 8])):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                self.parse([{**clip, 'layout_segments': segments, **invalid}], settings={'layout': 'adaptive'})
+        with self.assertRaises(ValueError):
+            self.parse([{**self.clip, 'layout_segments': segments}])
+
 
 class CacheTests(unittest.TestCase):
     def test_only_completed_intact_artifacts_hit(self):

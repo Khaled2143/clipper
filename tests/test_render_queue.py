@@ -47,6 +47,49 @@ class RenderQueueTests(unittest.IsolatedAsyncioTestCase):
         self.directory = Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
         self.state = self.enterContext(closing(ClipState(self.directory)))
 
+    async def test_watch_alerts_can_run_without_discord_clip_delivery(self):
+        config = WorkerConfig.from_env({
+            "TWITCH_CLIENT_ID": "id", "TWITCH_CLIENT_SECRET": "secret", "CHANNELS": "jynxzi,fanum",
+            "PUBLIC_POSTING_ENABLED": "1", "DISCORD_CLIP_DELIVERY": "0", "DISCORD_WATCH_ALERTS": "1",
+            "DISCORD_WEBHOOK_URL": "https://discord.com/api/webhooks/123/raw",
+        })
+        api = AsyncMock()
+        api.confirm_clip.return_value = "https://clips.twitch.tv/Example"
+        worker = Worker(api, None, config.webhook_url, {"1": "jynxzi", "2": "fanum"}, config.settings,
+                        self.state, render_queue=self.state.renders, discord_delivery=config.discord_delivery,
+                        discord_watch_alerts=config.discord_watch_alerts)
+        with patch("clipmatch.live_worker.send_discord", new=AsyncMock()) as discord:
+            worker.announce_watchlist()
+            await worker.drain()
+            worker.live("1", True)
+            await worker.drain()
+            await worker._confirm("Example", "jynxzi", "example")
+        messages = [call.args[2] for call in discord.call_args_list]
+        self.assertEqual(len(messages), 2)
+        self.assertIn("jynxzi, fanum", messages[0])
+        self.assertIn("[jynxzi] live", messages[1])
+        self.assertEqual(queued_rows(self.state), [("Example", "queued", 0)])
+        self.assertFalse(config.deliver_finished)
+
+    async def test_public_only_capture_queues_master_and_copy_without_discord(self):
+        config = WorkerConfig.from_env({"TWITCH_CLIENT_ID":"id", "TWITCH_CLIENT_SECRET":"secret",
+            "CHANNELS":"jynxzi", "PUBLIC_POSTING_ENABLED":"1", "DISCORD_CLIP_DELIVERY":"0"})
+        self.assertTrue(config.finish_clips and config.public_posting)
+        self.assertFalse(config.deliver_finished or config.discord_delivery)
+        self.state.renders.deliver_finished = config.deliver_finished
+        api = AsyncMock()
+        api.confirm_clip.return_value = "https://www.twitch.tv/jynxzi/clip/Example"
+        worker = Worker(api, None, "", {"1":"jynxzi"}, config.settings, self.state,
+                        render_queue=self.state.renders, discord_delivery=config.discord_delivery)
+        with patch("clipmatch.live_worker.send_discord", new=AsyncMock()) as discord:
+            await worker._confirm("Example", "jynxzi", "example")
+            discord.assert_not_called()
+        child = AsyncMock()
+        child.wait.return_value = 0
+        with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=child)) as start:
+            self.assertTrue(await self.state.renders.run_one(lambda *a, **k: None))
+        self.assertEqual(list(start.call_args.args[-2:]), ["--render-only", "--prepare-copy"])
+
     def test_pending_confirmation_and_chat_lead_commit_together(self):
         def reject_timing(action, table, *_args):
             if action == sqlite3.SQLITE_INSERT and table == "clip_chat_timing":

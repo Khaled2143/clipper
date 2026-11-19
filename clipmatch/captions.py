@@ -56,8 +56,10 @@ def fitted_size(text: str, maximum: int, width: int) -> int:
 def overlay_events(hook: str, label: str, duration: float, layout: str = 'manual') -> list[str]:
     if len(label) > 30:
         raise ValueError('label must be at most 30 characters; it will not be truncated')
-    if layout == 'stacked':
-        label_text = r'{\an1\pos(42,689)\fs32\c&HFFFFFF&\alpha&H20&\bord2\shad1}' + escape_ass(label)
+    if layout in ('stacked', 'adaptive'):
+        position = '36,696' if layout == 'adaptive' else '42,689'
+        label_text = (r'{\an1\pos(' + position + r')\fs32\c&HFFFFFF&\alpha&H20&\bord2\shad1}'
+                      + escape_ass(label))
         return [event(0, duration, 'Label', label_text, 1)]
     lines = textwrap.wrap(escape_ass(hook), width=27)
     if len(lines) > 3:

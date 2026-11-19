@@ -15,8 +15,11 @@ from .cache import atomic_json, cache_valid, complete, fingerprint
 from .cli import render_job
 from .highlight_signals import measure
 from .highlights import SHORT_SOURCE_SECONDS, choose_edit
+from .layout_judge import review_layout
 from .media import MediaInfo, package_version, probe, run
 from .render_queue import read_chat_lead
+from .screenshot_layout import MODEL_SHA256
+from .social_titles import setting
 
 
 LAYOUTS = Path(__file__).with_name("layouts.json")
@@ -58,15 +61,19 @@ def clip_directory(state_dir: Path, channel: str, clip_id: str) -> Path:
     return state_dir.resolve() / "finished" / channel.lower() / f"clip-{clip_id[:40]}-{digest}"
 
 
-def _layout(channel: str) -> list[float]:
+def _layouts(channel: str) -> list[list[float]]:
     profiles = json.loads(LAYOUTS.read_text(encoding="utf-8"))
-    rect = profiles.get(channel) if isinstance(profiles, dict) else None
-    if (not isinstance(rect, list) or len(rect) != 4
-            or any(type(v) not in (int, float) or not 0 <= v <= 1 for v in rect)
-            or rect[2] <= 0 or rect[3] <= 0
-            or rect[0] + rect[2] > 1.0000000001 or rect[1] + rect[3] > 1.0000000001):
-        raise ValueError(f"Set a normalized [x, y, width, height] for {channel} in clipmatch/layouts.json.")
-    return rect
+    profile = profiles.get(channel) if isinstance(profiles, dict) else None
+    rects = profile if isinstance(profile, list) and profile and isinstance(profile[0], list) else [profile]
+    if len(rects) > 2 or any(
+        not isinstance(rect, list) or len(rect) != 4
+        or any(type(v) not in (int, float) or not 0 <= v <= 1 for v in rect)
+        or rect[2] <= 0 or rect[3] <= 0
+        or rect[0] + rect[2] > 1.0000000001 or rect[1] + rect[3] > 1.0000000001
+        for rect in rects
+    ):
+        raise ValueError(f"Set one or two normalized camera rectangles for {channel} in clipmatch/layouts.json.")
+    return rects
 
 
 def _crop(rect: list[float], info: MediaInfo) -> list[int]:
@@ -153,10 +160,10 @@ def _source(directory: Path, channel: str, clip_id: str, url: str) -> MediaInfo:
         temporary.unlink(missing_ok=True)
 
 
-def finish_clip(state_dir: Path, channel: str, clip_id: str, url: str, *, render_only: bool) -> int:
+def finish_clip(state_dir: Path, channel: str, clip_id: str, url: str, *, render_only: bool, prepare_copy: bool=False) -> int:
     url = validate_clip(channel, clip_id, url)
     channel = channel.lower()
-    layout = _layout(channel)
+    layouts = _layouts(channel)
     directory = clip_directory(state_dir, channel, clip_id)
     directory.mkdir(parents=True, exist_ok=True)
     # A process-scoped SQLite lock also protects a manual rerun racing the queue.
@@ -169,7 +176,7 @@ def finish_clip(state_dir: Path, channel: str, clip_id: str, url: str, *, render
             raise
         info = _source(directory, channel, clip_id, url)
         duration = min(info.duration, info.video_duration or info.duration)
-        rect = tuple(_crop(layout, info))
+        cameras = [_crop(layout, info) for layout in layouts]
         try:
             chat_lead = read_chat_lead(state_dir, clip_id)
         except sqlite3.OperationalError as exc:
@@ -177,23 +184,49 @@ def finish_clip(state_dir: Path, channel: str, clip_id: str, url: str, *, render
             if (getattr(exc, "sqlite_errorcode", 0) & 0xff) in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
                 raise RetryLater("The chat timing database is busy. The clip can be retried.") from None
             raise
-        samples = measure(directory / "source.mp4", duration, rect) if duration > SHORT_SOURCE_SECONDS else []
+        samples = measure(directory / "source.mp4", duration, tuple(cameras[0])) if duration > SHORT_SOURCE_SECONDS else []
         edit = choose_edit(duration, samples, chat_lead)
         print(f"[{clip_id}] selected {edit.start:.2f} to {edit.end:.2f}s of {duration:.2f}s ({edit.cue})",
               flush=True)
+        mode = setting("CLIP_LAYOUT_MODE").strip().lower() or "screenshot"
+        model = setting("SOCIAL_VISION_MODEL") if mode == "vision" else ""
+        engine = ({"mode": "screenshot", "framing_version": 3, "model_sha256": MODEL_SHA256,
+                   "onnxruntime": package_version("onnxruntime")}
+                  if mode == "screenshot" else {"mode": mode, "model": model})
+        source_record = json.loads((directory / "source.manifest.json").read_text(encoding="utf-8"))
+        key = fingerprint(dict(stage="layout-judge-v5", source=source_record["sha256"], engine=engine,
+                               start=edit.start, end=edit.end, cameras=cameras, width=info.width, height=info.height))
+        review_path = directory / "layout-review.json"
+        manifest = directory / "layout-review.manifest.json"
+        if cache_valid(review_path, manifest, key):
+            review = json.loads(review_path.read_text(encoding="utf-8"))
+        else:
+            review = review_layout(directory / "source.mp4", edit.start, edit.end, cameras,
+                                   info.width, info.height, model, mode=mode)
+            if review["status"] == "judged":
+                atomic_json(review_path, review)
+                complete(review_path, manifest, key, "layout_judge", engine)
         clip = dict(id=directory.name, source="source.mp4", start=edit.start, end=edit.end,
-                    facecam_rect=rect, label=channel)
+                    layout_segments=review["segments"], label=channel)
         job = directory / "job.json"
-        atomic_json(job, dict(version=1, settings={"layout": "stacked"}, clips=[clip]))
+        atomic_json(job, dict(version=1, settings={"layout": "adaptive"}, clips=[clip]))
 
         def add_edit_provenance(data):
             data["source"]["twitch_url"] = url
             origin = json.loads((directory / "source.json").read_text(encoding="utf-8"))
             data["source"]["category"] = origin.get("category")
+            data["source"]["twitch_title"] = origin.get("title")
             data["edit"] = {**asdict(edit), "source_duration": duration, "chat_lead_seconds": chat_lead}
+            data["layout_review"] = review
 
-        return render_job(job, None, no_captions=True, send_finished=not render_only,
-                          add_provenance=add_edit_provenance)
+        status = render_job(job, None, no_captions=True, send_finished=not render_only,
+                            add_provenance=add_edit_provenance)
+        if status == 0 and render_only and prepare_copy:
+            from .social_titles import social_content
+            master = directory / "renders" / (directory.name + ".mp4")
+            record = json.loads(master.with_suffix(".manifest.json").read_text(encoding="utf-8"))
+            social_content(master, record["sha256"])
+        return status
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -203,6 +236,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--clip-id", required=True)
     parser.add_argument("--url", required=True)
     parser.add_argument("--render-only", action="store_true", help="Build the local master for inspection")
+    parser.add_argument("--prepare-copy", action="store_true", help="Prepare the public title and description with the master")
     args = parser.parse_args(argv)
     try:
         return finish_clip(**vars(args))

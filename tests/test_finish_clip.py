@@ -37,6 +37,7 @@ class FinishedEditMediaTests(unittest.TestCase):
                 shutil.copyfile(footage, destination)
                 return {"display_id": "Example", "channel": "Agent00", "title": "Example"}
             with patch.object(finish_clip, "_download", side_effect=local_download), \
+                 patch.dict(os.environ, {"SOCIAL_VISION_MODEL": ""}), \
                  patch("clipmatch.cli.transcribe", side_effect=AssertionError("unexpected transcription")):
                 status = finish_clip.main(["--state-dir", temp, "--channel", "agent00",
                                            "--clip-id", "Example", "--url", "https://clips.twitch.tv/Example",
@@ -114,6 +115,7 @@ class FinishClipTests(unittest.TestCase):
         layouts = self.state / "layouts.json"
         layouts.write_text('{"agent00": [0.75, 0.05, 0.25, 0.20]}')
         self.enterContext(patch.object(finish_clip, "LAYOUTS", layouts))
+        self.enterContext(patch.dict(os.environ, {"SOCIAL_VISION_MODEL": ""}))
         self.enterContext(redirect_stdout(StringIO()))
         self.errors = self.enterContext(redirect_stderr(StringIO()))
         self.info = MediaInfo(1920, 1080, 9.07, True, "h264", "aac", 9, 9.04)
@@ -147,9 +149,10 @@ class FinishClipTests(unittest.TestCase):
     def render(self, spec, config, *, send_finished, no_captions=False, add_provenance):
         settings, (clip,) = load_job(spec, config)
         self.assertTrue(no_captions, "Automatic masters must skip generated captions")
-        self.assertEqual(clip.facecam_rect, (1440, 54, 480, 216))
+        self.assertIsNone(clip.facecam_rect)
+        self.assertEqual([(s.start, s.facecam_rect) for s in clip.layout_segments], [(0, None)])
         self.assertEqual((clip.start, clip.end, clip.label, clip.hook), (0, 9, "agent00", ""))
-        self.assertEqual(settings.layout, "stacked")
+        self.assertEqual(settings.layout, "adaptive")
         self.assertEqual(Path(clip.source).read_bytes(), b"complete Twitch MP4")
         settings.output_dir.mkdir(exist_ok=True)
         data = {"source": {"url_or_path": clip.source, "start": clip.start, "end": clip.end}}
@@ -170,6 +173,30 @@ class FinishClipTests(unittest.TestCase):
         self.assertEqual(self.downloads, [self.canonical])
         sidecar, = self.state.glob("finished/agent00/*/renders/*.json")
         self.assertEqual(json.loads(sidecar.read_text())["source"]["twitch_url"], self.canonical)
+
+    def test_retry_reuses_visual_judgment_and_new_model_rechecks(self):
+        review = dict(model="local", status="judged", segments=[dict(start=0, facecam_rect=None)])
+        with patch.object(finish_clip, "run", side_effect=self.download), \
+             patch.object(finish_clip, "probe", return_value=self.info), \
+             patch.object(finish_clip, "render_job", side_effect=self.render), \
+             patch.object(finish_clip, "review_layout", return_value=review) as judge:
+            for model, expected_calls in [("local", 1), ("local", 1), ("updated", 2)]:
+                with patch.dict(os.environ, {"CLIP_LAYOUT_MODE": "vision", "SOCIAL_VISION_MODEL": model}):
+                    self.assertEqual(self.invoke("--render-only"), 0, self.errors.getvalue())
+                self.assertEqual(judge.call_count, expected_calls)
+
+    def test_screenshot_cache_retries_a_failure_and_ignores_social_title_model_changes(self):
+        single = [dict(start=0, facecam_rect=None)]
+        answers = [dict(status='unavailable', segments=single), dict(status='judged', segments=single)]
+        with patch.object(finish_clip, "run", side_effect=self.download), \
+             patch.object(finish_clip, "probe", return_value=self.info), \
+             patch.object(finish_clip, "render_job", side_effect=self.render), \
+             patch.object(finish_clip, "review_layout", side_effect=answers) as judge:
+            for social_model, calls in [('first', 1), ('first', 2), ('new-title-writer', 2)]:
+                with patch.dict(os.environ, {"CLIP_LAYOUT_MODE": "", "SOCIAL_VISION_MODEL": social_model}):
+                    self.assertEqual(self.invoke("--render-only"), 0, self.errors.getvalue())
+                self.assertEqual(judge.call_count, calls)
+                self.assertEqual(judge.call_args.kwargs["mode"], "screenshot")
 
     def test_invalid_and_mismatched_urls_never_create_work(self):
         for channel, slug, url in [

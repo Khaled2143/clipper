@@ -40,12 +40,19 @@ async def run_worker(config):
             raise ValueError("Twitch could not find any of the configured CHANNELS.")
         with closing(ClipState(config.state_dir)) as state:
             render_queue = state.renders if config.finish_clips else None
+            if render_queue is not None:
+                render_queue.deliver_finished = config.deliver_finished
             worker = Worker(api, session, config.webhook_url, channels, config.settings, state,
-                            render_queue=render_queue)
+                            render_queue=render_queue, discord_delivery=config.discord_delivery,
+                            discord_watch_alerts=config.discord_watch_alerts)
+            if config.discord_watch_alerts:
+                worker.announce_watchlist()
             for missing in sorted(set(config.channels) - set(channels.values())):
                 worker.channel_error(missing, "Twitch could not find this channel")
             worker.resume()
-            log("watching", channels=list(channels.values()), finish_clips=config.finish_clips)
+            log("watching", channels=list(channels.values()), finish_clips=config.finish_clips,
+                discord_delivery=config.discord_delivery, discord_watch_alerts=worker.discord_watch_alerts,
+                public_posting=config.public_posting)
 
             async def tick():
                 while True:
@@ -66,6 +73,9 @@ async def run_worker(config):
             ]
             if render_queue is not None:
                 tasks.append(asyncio.create_task(render_queue.run(log)))
+                if config.public_posting:
+                    from .publishing import run_publisher
+                    tasks.append(asyncio.create_task(run_publisher(state, session, os.environ, log)))
             try:
                 finished, _ = await asyncio.wait([*tasks, worker.failure], return_when=asyncio.FIRST_COMPLETED)
                 if worker.failure in finished:
