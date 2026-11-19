@@ -4,12 +4,14 @@ Each new finished Discord post carries its playable MP4, a copyable first line s
 
 ## Choosing the title
 
-Use a short, complete spoken line from the selected edit when the local transcription provides a clear candidate. Include the streamer’s display name. A quote can come from the game or another speaker, so the title should avoid attributing it to the streamer. For example, a verified line from the Fanum edit could appear as **“Can I Use This Wrench?” | Fanum Plays GTA 6**. Only use words heard within the finished cut. Media exports remain caption-free.
+Give each title a concrete hook from the finished edit: a recognizable action, discovery, reaction, or distinctive spoken line. Include the streamer’s display name and use the game name when it adds context. Two sample headlines from the reviewed footage are **Agent00 Spots the Vice City Signs in GTA 6** and **Jynxzi Cracks Up as the Motorcycle Pops a Wheelie in GTA 6**. The same headline can be pasted into TikTok.
 
-For clips without a usable line, the owner chose an automatic streamer-and-game title over flagging the clip for a human headline. For example, **Jynxzi Plays GTA 6**. Read the category from the Twitch clip metadata. Handle non-game categories naturally, such as **Just Chatting with Jynxzi**. If the category is unavailable, use **A Clip from Jynxzi’s Stream**. An editorial headline describing a visual event would require additional evidence beyond the current scene and motion signals.
+Use the selected cut as evidence. A quote must appear in that cut and may come from someone other than the streamer. The Twitch category supplies context. Several clips from one stream can share the same Twitch title. Scene and motion scores indicate when something happened but cannot identify a road sign or a wheelie.
+
+The owner selected automated visual titles. Read sampled frames from the finished edit alongside any available local transcript. If a candidate repeats a recent title for this streamer, try a different supported detail. If none is available, deliver the MP4 and flag the title for review. Extra numbers, emojis, and punctuation alone do not distinguish two moments.
 
 ## Posting and verification
 
-Use a fixed script and local speech recognition. Keep the first line within 100 characters and choose a shorter candidate or the fallback if needed. Use a factual description from available clip metadata and keep the Twitch URL on its own line. Preserve the generated copy beside the master for review. Missing speech tools, unusable audio, or missing category data should still produce a deliverable post. The size-limited attachment retry must carry the same text, and completed jobs retain their delivery receipts.
+Keep the video editing workflow caption-free. Keep the title within 100 characters. Use a factual one-line YouTube description and keep the Twitch URL on its own line. Preserve the generated copy beside the master for review. A title-generation failure should still produce a deliverable post. The size-limited attachment retry must carry the same text, and completed jobs retain their delivery receipts.
 
-Validate the quote and fallback using saved Windows clips, verify the Discord payload on both upload paths with local tests, and check that text generation leaves the video unchanged.
+Review titles side by side for saved clips from the same stream, including two with the same Twitch title, one with useful dialogue, and one with a visual payoff. Check every claimed detail against the final cut. Verify the Discord payload on both upload paths with local tests and check that text generation leaves the video unchanged.

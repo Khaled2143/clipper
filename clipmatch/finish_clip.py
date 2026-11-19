@@ -97,7 +97,7 @@ def _download(path: Path, url: str) -> dict:
             "--no-warnings", "--use-extractors", "twitch:clips",
             "--format", "best[ext=mp4][format_id!^=portrait]",
             "--match-filter", f"duration <=? {MAX_SECONDS}", "--force-overwrites", "--no-part",
-            "--print", "after_move:%(.{display_id,channel,title})j", "--output", str(path), "--", url,
+            "--print", "after_move:%(.{display_id,channel,title,categories})j", "--output", str(path), "--", url,
         ], timeout=180)
     except ValueError as exc:
         cause = exc.__cause__
@@ -140,7 +140,9 @@ def _source(directory: Path, channel: str, clip_id: str, url: str) -> MediaInfo:
         info = _inspect_source(temporary)
         title = meta.get("title") if isinstance(meta.get("title"), str) else ""
         temporary.replace(output)
-        atomic_json(origin, dict(key=key, channel=channel, clip_id=clip_id, url=url, title=title))
+        categories = meta.get("categories")
+        category = next((v for v in categories if isinstance(v, str) and v.strip()), None) if isinstance(categories, list) else None
+        atomic_json(origin, dict(key=key, channel=channel, clip_id=clip_id, url=url, title=title, category=category))
         complete(output, manifest, key, "twitch_clip", {"yt-dlp": package_version("yt-dlp")})
         return info
     finally:
@@ -182,6 +184,8 @@ def finish_clip(state_dir: Path, channel: str, clip_id: str, url: str, *, render
 
         def add_edit_provenance(data):
             data["source"]["twitch_url"] = url
+            origin = json.loads((directory / "source.json").read_text(encoding="utf-8"))
+            data["source"]["category"] = origin.get("category")
             data["edit"] = {**asdict(edit), "source_duration": duration, "chat_lead_seconds": chat_lead}
 
         return render_job(job, None, no_captions=True, send_finished=not render_only,

@@ -11,6 +11,7 @@ from dotenv import dotenv_values
 from .cache import atomic_json, file_hash
 from .live_api import ApiError, _request, discord_webhook_url
 from .media import probe, run
+from .social_titles import social_content
 
 
 _ATTACHMENT_LIMIT_BYTES = 9 * 1024 * 1024
@@ -64,10 +65,13 @@ def _make_attachment(master: Path, destination: Path) -> None:
     raise ValueError("Could not fit the full-length MP4 within the attachment size limit. Local master retained.")
 
 
-async def _upload(session: ClientSession, webhook: str, path: Path, filename: str) -> None:
+async def _upload(session: ClientSession, webhook: str, path: Path, filename: str, content: str = "") -> None:
     with path.open("rb") as video:
         form = FormData()
-        form.add_field("payload_json", json.dumps({"allowed_mentions": {"parse": []}}))
+        payload = {"allowed_mentions": {"parse": []}}
+        if content:
+            payload["content"] = content
+        form.add_field("payload_json", json.dumps(payload))
         form.add_field("files[0]", video, filename=filename, content_type="video/mp4")
         try:
             message = await _request(session, "Discord finished upload", "POST", webhook,
@@ -97,14 +101,15 @@ async def deliver_finished(output: Path, receipt: Path, webhook: str) -> bool:
     if deliveries.get(webhook_id) == digest:
         return False
 
+    content = await asyncio.to_thread(social_content, output, digest)
     async with ClientSession() as session:
         try:
-            await _upload(session, webhook, output, output.name)
+            await _upload(session, webhook, output, output.name, content)
         except _AttachmentTooLarge:
             with tempfile.TemporaryDirectory(prefix="clipmatch-discord-") as directory:
                 attachment = Path(directory) / "attachment.mp4"
                 await asyncio.to_thread(_make_attachment, output, attachment)
-                await _upload(session, webhook, attachment, output.name)
+                await _upload(session, webhook, attachment, output.name, content)
     deliveries[webhook_id] = digest
     try:
         atomic_json(receipt, deliveries)

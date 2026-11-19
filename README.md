@@ -49,6 +49,12 @@ Discord receives the verified 1080×1920 master first. If Discord rejects its si
 
 To inspect an earlier source locally, run `python -m clipmatch.finish_clip --state-dir .clipbot --channel LOGIN --clip-id ID --url URL --render-only`. Use `clipmatch-live enqueue-render --channel LOGIN --clip-id ID --url URL` to queue an earlier clip for first delivery. The queue retries temporary download failures and logs `render_review` for jobs needing attention. Check the finished channel before using `clipmatch-live retry-render --clip-id ID` after an uncertain upload.
 
+### Shared YouTube Shorts title and TikTok description
+
+On Windows, install Ollama and run `ollama pull qwen3-vl:8b-instruct`. Set `SOCIAL_VISION_MODEL=qwen3-vl:8b-instruct` in the watcher's `.env`. Keep Ollama running on its default loopback port 11434. For speech context, install the transcription extra and set `SOCIAL_SPEECH_MODEL` to a local faster-whisper model directory. Without a cached speech model the writer uses frames alone.
+
+For each new live MP4 the writer samples six frames from the final cut, reads the audio locally when available and checks proposed titles against the streamer's previous 100 titles. The first line of the Discord post can be copied to either platform. A one-line YouTube description and the original Twitch URL follow. The adjacent `.social.json` retains the copy. When the model is unavailable or its suggestions repeat previous titles, Discord still gets the MP4 and a title-review notice.
+
 ### Run on Railway
 
 Deploy this repository as a **single worker** from the directory containing `railway.toml`. Attach a volume at `/data`. In Railway Variables set the same client ID, secret, channels, and `DISCORD_WEBHOOK_URL`. To publish finished videos, also set `DISCORD_FINISHED_WEBHOOK_URL`. Stop the local watcher before transferring its current `TWITCH_REFRESH_TOKEN` from the local `.clipbot/refresh-token` file. The worker uses Railway's volume mount path for its rotated token, pending confirmations, cooldowns, render queue, and finished clips. The repository supplies the container, start command, and restart policy. The worker uses outbound connections and requires no public domain.

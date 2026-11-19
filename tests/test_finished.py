@@ -25,6 +25,7 @@ class FinishedDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.receipt = self.root / "receipt.json"
         self.uploads = []
         self.responses = []
+        self.payloads = []
         app = web.Application(client_max_size=50 * 1024 * 1024)
         app.router.add_post("/api/webhooks/{id}/token", self.receive)
         self.server = TestServer(app)
@@ -37,7 +38,9 @@ class FinishedDeliveryTests(unittest.IsolatedAsyncioTestCase):
         video = fields["files[0]"]
         with video.file:
             self.uploads.append((request.path, video.filename, video.file.read()))
-        self.assertEqual(json.loads(fields["payload_json"]), {"allowed_mentions": {"parse": []}})
+        payload = json.loads(fields["payload_json"])
+        self.assertEqual(payload["allowed_mentions"], {"parse": []})
+        self.payloads.append(payload)
         if self.responses:
             status, body = self.responses.pop(0)
             if status == 0:
@@ -58,6 +61,16 @@ class FinishedDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.output.write_bytes(b"revised render")
         self.assertTrue(await self.deliver())
         self.assertTrue(await self.deliver(webhook_id=99))
+
+    async def test_caption_follows_both_attachment_sizes_and_receipt_skips_generation(self):
+        self.responses.append((413, {}))
+        copy = "Agent00 Spots the Vice City Signs\nHe looks up as the signs pass.\nhttps://clips.twitch.tv/Signs"
+        with patch.object(finished, "social_content", return_value=copy) as generate, \
+             patch.object(finished, "_make_attachment", side_effect=lambda src, dst: dst.write_bytes(b"small")):
+            self.assertTrue(await self.deliver())
+            self.assertFalse(await self.deliver())
+        self.assertEqual([item.get("content") for item in self.payloads], [copy, copy])
+        self.assertEqual(generate.call_count, 1)
 
     async def test_only_definite_size_rejections_trigger_a_smaller_upload(self):
         def compress(source, destination):

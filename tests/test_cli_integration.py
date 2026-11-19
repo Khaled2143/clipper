@@ -88,7 +88,7 @@ class RenderIntegrationTests(unittest.TestCase):
 
         uploads = []
 
-        async def capture_upload(session, webhook, path, filename):
+        async def capture_upload(session, webhook, path, filename, content=""):
             uploads.append((filename, file_hash(path)))
 
         webhook = 'https://discord.com/api/webhooks/1/token'

@@ -72,13 +72,13 @@ class FinishedEditMediaTests(unittest.TestCase):
                      str(destination)])
                 return {"display_id": "Example", "channel": "agent00", "title": "Example"}
 
-            async def lose_confirmation(session, webhook, path, filename):
+            async def lose_confirmation(session, webhook, path, filename, content=""):
                 at_upload.append(json.loads(path.with_suffix(".json").read_text(encoding="utf-8")))
                 raise FinishedDeliveryUncertain("Mock upload unconfirmed")
 
             webhook = "https://discord.com/api/webhooks/1/token"
             with patch.object(finish_clip, "_download", side_effect=local_download), \
-                 patch.dict(os.environ, {"DISCORD_FINISHED_WEBHOOK_URL": webhook}), \
+                 patch.dict(os.environ, {"DISCORD_FINISHED_WEBHOOK_URL": webhook, "SOCIAL_VISION_MODEL": ""}), \
                  patch("clipmatch.finished._upload", new=lose_confirmation), \
                  redirect_stdout(StringIO()), redirect_stderr(StringIO()):
                 self.assertEqual(finish_clip.main([*args, "--render-only"]), 0)
