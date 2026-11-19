@@ -209,6 +209,22 @@ class FinishClipTests(unittest.TestCase):
         with patch.object(finish_clip, "probe", return_value=self.info):
             self.assertEqual(finish_clip._inspect_source(source), self.info)
 
+    def test_not_yet_available_twitch_source_requests_a_queue_retry(self):
+        for message, expected in (
+            ("unable to download video data: HTTP Error 404: Not Found", 75),
+            ("This clip is no longer available", 75),
+            ("Clip is unavailable", 75),
+            ("Requested format is not available", 75),
+            ("This clip is private", 1),
+            ("HTTP Error 403: Forbidden", 1),
+            ("unable to open output file: Permission denied", 1),
+        ):
+            failure = subprocess.CalledProcessError(1, "yt-dlp", stderr=f"ERROR: {message}")
+            with self.subTest(message=message), patch("subprocess.run", side_effect=failure):
+                self.assertEqual(self.invoke(), expected)
+        self.assertFalse(list(self.state.rglob("source.mp4")))
+        self.assertFalse(list(self.state.rglob("finished-discord.json")))
+
     def test_interrupted_source_is_never_published_and_can_be_retried(self):
         def interrupted(argv, **kwargs):
             Path(argv[argv.index("--output") + 1]).write_bytes(b"partial")

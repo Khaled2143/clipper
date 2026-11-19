@@ -101,10 +101,14 @@ def _download(path: Path, url: str) -> dict:
         ], timeout=180)
     except ValueError as exc:
         cause = exc.__cause__
+        # Twitch can confirm a new clip before its metadata and MP4 are readable.
+        # The render queue bounds retries, including for a genuinely missing clip.
         transient = ("timed out", "connection reset", "connection refused", "connection aborted",
                      "name resolution", "getaddrinfo failed", "nodename nor servname",
                      "network is unreachable", "remote end closed", "incomplete read",
-                     "http error 429", "http error 5")
+                     "http error 404", "http error 429", "http error 5",
+                     "clip is no longer available", "clip is unavailable", "clip is not available",
+                     "requested format is not available", "no video formats found")
         if (isinstance(cause, subprocess.TimeoutExpired)
                 or (isinstance(cause, subprocess.CalledProcessError)
                     and any(reason in (cause.stderr or "").lower() for reason in transient))):

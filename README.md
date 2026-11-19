@@ -47,7 +47,7 @@ The finished MP4 has the streamer above the gameplay, the original audio and a c
 
 Discord receives the verified 1080×1920 master first. If Discord rejects its size, the sender encodes the selected edit to fit 9 MiB. For publishing, use the retained master in `<state-dir>/finished/<channel>/<clip>/renders/`. Its JSON sidecar records the source times, the selected cue and any chat timing. The full Twitch download is beside the `renders` directory as `source.mp4`.
 
-To inspect an earlier source locally, run `python -m clipmatch.finish_clip --state-dir .clipbot --channel LOGIN --clip-id ID --url URL --render-only`. Use `clipmatch-live enqueue-render --channel LOGIN --clip-id ID --url URL` to queue an earlier clip for first delivery. The queue retries temporary download failures and logs `render_review` for jobs needing attention. Check the finished channel before using `clipmatch-live retry-render --clip-id ID` after an uncertain upload.
+To inspect an earlier source locally, run `python -m clipmatch.finish_clip --state-dir .clipbot --channel LOGIN --clip-id ID --url URL --render-only`. Use `clipmatch-live enqueue-render --channel LOGIN --clip-id ID --url URL` to queue an earlier clip for first delivery. If Twitch confirms a clip before its video is available, the queue retries the download after one minute and again two minutes after the second failure. It logs `render_review` if all three attempts fail. Check the finished channel before using `clipmatch-live retry-render --clip-id ID` after an uncertain upload.
 
 ### Shared YouTube Shorts title and TikTok description
 
