@@ -28,7 +28,7 @@ class SocialTitleTests(unittest.TestCase):
         alternate = dict(title="Jynxzi Finds a Skateboard Inside the Box", description="A skateboard comes into view.")
         self.prepare("one", [first])
         content, _, master = self.prepare("two", [dict(first, title=first["title"] + "!!"), alternate])
-        self.assertEqual(content.splitlines(), [alternate["title"], alternate["description"], self.url + "two"])
+        self.assertEqual(content.splitlines(), [alternate["title"], alternate["description"], f"<{self.url}two>"])
         self.assertEqual(json.loads(master.with_suffix(".social.json").read_text())["title"], alternate["title"])
         self.assertEqual(self.prepare("two", [])[0:2], (content, 0))
 
@@ -36,7 +36,7 @@ class SocialTitleTests(unittest.TestCase):
         for slug, candidates in [("empty", []), ("generic", [dict(title="Jynxzi Plays GTA 6", description="Gameplay.")])]:
             content, _, _ = self.prepare(slug, candidates)
             self.assertIn("Title needs review", content)
-            self.assertIn(self.url + slug, content)
+            self.assertEqual(content.splitlines()[-1], f"<{self.url}{slug}>")
 
     def test_service_outage_retains_review_notice_and_source(self):
         master = self.root / "channel" / "job" / "renders" / "sample.mp4"
@@ -44,5 +44,5 @@ class SocialTitleTests(unittest.TestCase):
         data = dict(label="jynxzi", source=dict(twitch_url=self.url))
         with patch.object(social_titles, "generate", side_effect=ConnectionRefusedError):
             self.assertEqual(social_titles.post_copy(master, "abc", data, "local-model"),
-                             "Title needs review\n" + self.url)
+                             f"Title needs review\n<{self.url}>")
         self.assertEqual(json.loads(master.with_suffix(".social.json").read_text())["status"], "needs_review")

@@ -146,7 +146,6 @@ def choose(candidates, recent, channel):
 
 def post_copy(master, digest, data, model):
     url = data["source"]["twitch_url"]
-    fallback = f"Title needs review\n{url}"
     # The watcher stores each master under finished/<channel>/<clip>/renders/.
     history = master.parents[2] / "social-titles.sqlite3"
     copy = None
@@ -183,7 +182,9 @@ def post_copy(master, digest, data, model):
         atomic_json(master.with_suffix(".social.json"), record)
     except OSError as exc:
         print(f"Could not save social copy beside master ({type(exc).__name__}).", flush=True)
-    return "\n".join((*copy, url)) if copy else fallback
+    # Discord angle brackets suppress the Twitch card while keeping the source clickable.
+    lines = copy or ("Title needs review",)
+    return "\n".join((*lines, f"<{url}>"))
 
 
 def social_content(master, digest):

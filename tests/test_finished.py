@@ -64,7 +64,7 @@ class FinishedDeliveryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_caption_follows_both_attachment_sizes_and_receipt_skips_generation(self):
         self.responses.append((413, {}))
-        copy = "Agent00 Spots the Vice City Signs\nHe looks up as the signs pass.\nhttps://clips.twitch.tv/Signs"
+        copy = "Agent00 Spots the Vice City Signs\nHe looks up as the signs pass.\n<https://clips.twitch.tv/Signs>"
         with patch.object(finished, "social_content", return_value=copy) as generate, \
              patch.object(finished, "_make_attachment", side_effect=lambda src, dst: dst.write_bytes(b"small")):
             self.assertTrue(await self.deliver())
