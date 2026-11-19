@@ -1,10 +1,30 @@
 """Persistent, single-consumer queue for rendering confirmed Twitch clips."""
 import asyncio
 from contextlib import closing
+import math
 from pathlib import Path
 import sqlite3
 import sys
 import time
+
+
+def read_chat_lead(state_dir: Path, clip_id: str) -> float | None:
+    """Read seconds from chat rise to clip request, including on pre-timing databases."""
+    database = (state_dir / "clips.sqlite3").resolve()
+    try:
+        db = sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)
+    except sqlite3.OperationalError as exc:
+        if exc.sqlite_errorcode == sqlite3.SQLITE_CANTOPEN:
+            return None
+        raise
+    with closing(db):
+        table = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='clip_chat_timing'").fetchone()
+        if table is None:
+            return None
+        row = db.execute("SELECT lead_seconds FROM clip_chat_timing WHERE id=?", (clip_id,)).fetchone()
+    if row and isinstance(row[0], (int, float)) and 0 <= row[0] < math.inf:
+        return float(row[0])
+    return None
 
 
 class RenderQueue:

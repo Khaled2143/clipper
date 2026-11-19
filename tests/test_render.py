@@ -27,7 +27,7 @@ class RenderTests(unittest.TestCase):
                 start = (row * 1080 + x) * 3
                 self.assertGreater(frame[start + channel], 220, f"pixel at {x},{row}")
 
-    def test_automatic_overlays_show_only_the_streamer_and_words(self):
+    def test_stacked_layout_places_the_streamer_label_and_optional_words(self):
         from clipmatch.captions import caption_events
         label, = overlay_events("", "agent00", 5, "stacked")
         self.assertIn("agent00", label)

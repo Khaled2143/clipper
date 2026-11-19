@@ -43,6 +43,28 @@ class SpikeSettingsTests(unittest.TestCase):
 
 
 class DetectorTests(unittest.TestCase):
+    def test_rise_starts_with_the_sustained_messages_in_each_configured_window(self):
+        start = 1015.125
+        for seconds in (1, 10, 30):
+            with self.subTest(seconds=seconds):
+                detector = Detector(SpikeSettings(bucket_seconds=seconds, min_messages=10, warmup_minutes=0),
+                                    start=start)
+                for fraction, count in ((0.05, 1), (0.64, 3), (0.69, 3), (0.76, 3), (0.84, 3), (0.93, 2)):
+                    detector.advance(start + seconds * fraction)
+                    add_messages(detector, count)
+                [bucket] = detector.advance(start + seconds)
+                self.assertTrue(bucket.spike)
+                self.assertEqual(bucket.rise_at, start + seconds * 0.64)
+
+    def test_two_widely_separated_messages_can_trigger_without_a_sustained_rise(self):
+        detector = Detector(SpikeSettings(bucket_seconds=30, min_messages=2, warmup_minutes=0), start=0)
+        for instant in (1, 29):
+            detector.advance(instant)
+            add_messages(detector, 1)
+        [bucket] = detector.advance(30)
+        self.assertTrue(bucket.spike)
+        self.assertIsNone(bucket.rise_at)
+
     def test_fractional_start_closes_at_the_computed_boundary(self):
         start = 1015.1
         detector = Detector(SpikeSettings(), start=start)
@@ -115,6 +137,7 @@ class DetectorTests(unittest.TestCase):
         [bucket] = detector.advance(86410)
         self.assertEqual(bucket.baseline, 0.0)
         self.assertTrue(bucket.spike)
+        self.assertEqual(bucket.rise_at, 86400)
 
     def test_channels_have_independent_counts_and_baselines(self):
         settings = SpikeSettings(warmup_minutes=0)

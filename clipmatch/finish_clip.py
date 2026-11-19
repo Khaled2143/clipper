@@ -1,9 +1,9 @@
 """Render one confirmed public Twitch clip using its streamer's saved layout."""
 import argparse
 from contextlib import closing
+from dataclasses import asdict
 import hashlib
 import json
-import os
 from pathlib import Path
 import re
 import sqlite3
@@ -13,7 +13,10 @@ from urllib.parse import urlsplit
 
 from .cache import atomic_json, cache_valid, complete, fingerprint
 from .cli import render_job
+from .highlight_signals import measure
+from .highlights import SHORT_SOURCE_SECONDS, choose_edit
 from .media import MediaInfo, package_version, probe, run
+from .render_queue import read_chat_lead
 
 
 LAYOUTS = Path(__file__).with_name("layouts.json")
@@ -159,19 +162,30 @@ def finish_clip(state_dir: Path, channel: str, clip_id: str, url: str, *, render
                 raise RetryLater("Another process is already working on this clip.") from None
             raise
         info = _source(directory, channel, clip_id, url)
-        clip = dict(id=directory.name, source="source.mp4", start=0,
-                    end=min(info.duration, info.video_duration or info.duration),
-                    facecam_rect=_crop(layout, info), label=channel)
+        duration = min(info.duration, info.video_duration or info.duration)
+        rect = tuple(_crop(layout, info))
+        try:
+            chat_lead = read_chat_lead(state_dir, clip_id)
+        except sqlite3.OperationalError as exc:
+            # SQLite extended result codes keep the primary code in the low byte.
+            if (getattr(exc, "sqlite_errorcode", 0) & 0xff) in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+                raise RetryLater("The chat timing database is busy. The clip can be retried.") from None
+            raise
+        samples = measure(directory / "source.mp4", duration, rect) if duration > SHORT_SOURCE_SECONDS else []
+        edit = choose_edit(duration, samples, chat_lead)
+        print(f"[{clip_id}] selected {edit.start:.2f} to {edit.end:.2f}s of {duration:.2f}s ({edit.cue})",
+              flush=True)
+        clip = dict(id=directory.name, source="source.mp4", start=edit.start, end=edit.end,
+                    facecam_rect=rect, label=channel)
         job = directory / "job.json"
-        settings = {"model": os.environ.get("CLIPMATCH_MODEL") or "small", "layout": "stacked"}
-        atomic_json(job, dict(version=1, settings=settings, clips=[clip]))
-        status = render_job(job, None, send_finished=not render_only)
-        if status == 0:
-            sidecar = directory / "renders" / f"{directory.name}.json"
-            data = json.loads(sidecar.read_text(encoding="utf-8"))
+        atomic_json(job, dict(version=1, settings={"layout": "stacked"}, clips=[clip]))
+
+        def add_edit_provenance(data):
             data["source"]["twitch_url"] = url
-            atomic_json(sidecar, data)
-        return status
+            data["edit"] = {**asdict(edit), "source_duration": duration, "chat_lead_seconds": chat_lead}
+
+        return render_job(job, None, no_captions=True, send_finished=not render_only,
+                          add_provenance=add_edit_provenance)
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -4,7 +4,7 @@ Approved by the owner in conversation following design review. Milestone impleme
 
 ## Phase 2 of the live clip workflow
 
-The watcher posts confirmed Twitch links and stream status to `DISCORD_WEBHOOK_URL`. A separate script downloads the confirmed clip, applies the streamer's saved facecam and gameplay layout, transcribes the audio locally, burns in captions, and exports the vertical MP4. It sends that MP4 as an attachment to `DISCORD_FINISHED_WEBHOOK_URL`, a webhook created in the finished-clips channel. The renderer's `--send-finished` option handles this delivery.
+The watcher posts confirmed Twitch links and stream status to `DISCORD_WEBHOOK_URL`. For the finished channel, keep the full Twitch capture and use a fixed script to choose the opening and ending from the original footage. Chat timing helps locate the reaction. Gameplay, facecam and audio changes help identify the setup and payoff. Preserve extra context when the timing is ambiguous. Apply the saved facecam and gameplay layout and export the master without generated speech captions. The renderer's `--send-finished` option sends the MP4 to `DISCORD_FINISHED_WEBHOOK_URL`. A size rejection triggers a smaller encode of the selected edit. Keep the full-quality master for publishing.
 
 ## Intent and agreed scope
 

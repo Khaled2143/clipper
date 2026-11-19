@@ -6,7 +6,7 @@ import os
 import re
 import tempfile
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -85,7 +85,8 @@ def _clip_error(status, body):
     return f"Twitch clip creation returned HTTP 403 ({reason})"
 
 
-async def _request(session, service, method, url, *, attempts=3, bucket=None, timeout_seconds=15, **kwargs):
+async def _request(session, service, method, url, *, attempts=3, bucket=None, timeout_seconds=15,
+                   on_attempt: Callable[[], None] | None = None, **kwargs):
     # Replay only explicit throttling responses. A lost POST response can mean
     # the service already created the clip, subscription, or Discord message.
     creating_clip = method == "POST" and url == f"{HELIX}/clips"
@@ -98,6 +99,8 @@ async def _request(session, service, method, url, *, attempts=3, bucket=None, ti
             if delay:
                 await asyncio.sleep(delay)
                 wait_budget -= delay
+        if on_attempt is not None:
+            on_attempt()
         try:
             async with session.request(
                 method, url, allow_redirects=False, timeout=aiohttp.ClientTimeout(total=timeout_seconds), **kwargs
@@ -275,10 +278,10 @@ class LiveAPI:
             seen.add(cursor)
             params = {"type": subscription["type"], "after": cursor}
 
-    async def create_clip(self, broadcaster_id: str) -> str:
+    async def create_clip(self, broadcaster_id: str, *, on_attempt: Callable[[], None] | None = None) -> str:
         body, _ = await self._authenticated("POST", f"{HELIX}/clips", params={
             "broadcaster_id": broadcaster_id, "duration": "60",
-        })
+        }, on_attempt=on_attempt)
         rows = _rows(body)
         if not rows:
             raise ApiError(502, "Twitch returned no clip ID")

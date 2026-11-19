@@ -11,6 +11,7 @@ from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import patch
 
+from clipmatch.cache import file_hash
 from clipmatch.cli import main
 from clipmatch.media import probe, preflight
 
@@ -18,16 +19,16 @@ MEDIA_AVAILABLE = bool(shutil.which('ffmpeg') and shutil.which('ffprobe'))
 
 
 class CliTests(unittest.TestCase):
-    def test_finished_render_requires_captioning_and_a_facecam_layout(self):
+    def test_finished_render_requires_a_facecam_rect(self):
         webhook = "https://discord.com/api/webhooks/1/token"
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"DISCORD_FINISHED_WEBHOOK_URL": webhook}):
             spec = Path(directory) / "job.yaml"
             clip = dict(id="one", source="a.mp4", start=0, end=1, label="A", hook="Hi")
             spec.write_text(json.dumps(dict(version=1, clips=[clip])))
-            for flags, reason in ((["--no-captions"], "--no-captions"), ([], "facecam_rect")):
+            for flags in ([], ["--no-captions"]):
                 with self.subTest(flags=flags), redirect_stderr(StringIO()) as error:
                     self.assertEqual(main(["render-manual", str(spec), "--send-finished", *flags]), 1)
-                    self.assertIn(reason, error.getvalue())
+                    self.assertIn("facecam_rect", error.getvalue())
 
     def test_send_finished_requires_its_own_webhook_before_rendering(self):
         with patch.dict(os.environ, {"DISCORD_FINISHED_WEBHOOK_URL": "", "DISCORD_WEBHOOK_URL": "capture"}):
@@ -75,6 +76,65 @@ class RenderIntegrationTests(unittest.TestCase):
     def invoke(self,*extra):
         with patch('clipmatch.transcribe.load_model',return_value=(self.model,'cpu','int8')),redirect_stdout(StringIO()):
             return main(['render-manual',str(self.spec),*extra])
+
+    def test_send_finished_replaces_the_captioned_master_before_upload(self):
+        self.job['clips'] = self.job['clips'][1:]
+        self.spec.write_text(json.dumps(self.job))
+        self.assertEqual(self.invoke(), 0)
+        output = self.root / 'renders' / 'face.mp4'
+        captioned_digest = file_hash(output)
+        self.assertIn('hello', output.with_suffix('.srt').read_text(encoding='utf-8'))
+        self.assertIn('world', output.with_suffix('.ass').read_text(encoding='utf-8'))
+
+        uploads = []
+
+        async def capture_upload(session, webhook, path, filename):
+            uploads.append((filename, file_hash(path)))
+
+        webhook = 'https://discord.com/api/webhooks/1/token'
+        with patch.dict(os.environ, {'DISCORD_FINISHED_WEBHOOK_URL': webhook}), \
+             patch('clipmatch.finished._upload', new=capture_upload), \
+             patch('clipmatch.cli.transcribe', side_effect=AssertionError('unexpected transcription')):
+            self.assertEqual(self.invoke('--send-finished'), 0)
+            self.assertEqual(self.invoke('--send-finished', '--no-captions'), 0)
+
+        finished_digest = file_hash(output)
+        self.assertNotEqual(finished_digest, captioned_digest)
+        self.assertEqual(uploads, [(output.name, finished_digest)])
+        sidecar = json.loads(output.with_suffix('.json').read_text(encoding='utf-8'))
+        self.assertFalse(sidecar['captions_enabled'])
+        self.assertIsNone(sidecar['transcription'])
+        self.assertFalse(output.with_suffix('.srt').exists())
+        self.assertFalse(output.with_suffix('.ass').exists())
+
+    def test_stacked_render_without_captions_keeps_label_and_audio(self):
+        clip = self.job['clips'][1]
+        clip.pop('hook')
+        clip['label'] = 'agent00'
+        self.job['clips'] = [clip]
+        self.job['settings']['layout'] = 'stacked'
+        self.spec.write_text(json.dumps(self.job))
+        with patch('clipmatch.cli.transcribe', side_effect=AssertionError('unexpected transcription')):
+            self.assertEqual(self.invoke('--no-captions', '--clean'), 0)
+
+        output = self.root / 'renders' / 'face.mp4'
+        info = probe(output)
+        self.assertEqual((info.width, info.height, info.video_codec, info.audio_codec),
+                         (1080, 1920, 'h264', 'aac'))
+        self.assertAlmostEqual(info.audio_duration, 1, delta=.05)
+        self.assertFalse((self.root / 'work' / 'face' / 'audio.wav').exists())
+        self.assertFalse(output.with_suffix('.srt').exists())
+        self.assertFalse(output.with_suffix('.ass').exists())
+
+        def label_pixels(video):
+            # The white label is the only bright green component on this solid red facecam.
+            rgb = subprocess.check_output(['ffmpeg', '-v', 'error', '-i', str(video),
+                                           '-vf', 'crop=240:64:16:636', '-frames:v', '1',
+                                           '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'])
+            return sum(green > 160 for green in rgb[1::3])
+
+        self.assertGreater(label_pixels(output), 100)
+        self.assertEqual(label_pixels(output.with_name('face.clean.mp4')), 0)
 
     def test_two_layouts_captions_clean_exports_and_resume(self):
         self.assertEqual(self.invoke('--clean'),0)

@@ -1,4 +1,5 @@
 import asyncio
+import sqlite3
 import tempfile
 import unittest
 from contextlib import closing
@@ -10,6 +11,7 @@ from aiohttp.test_utils import TestServer
 
 from clipmatch.live_api import ApiError
 from clipmatch.live_worker import ClipState, Worker, WorkerConfig
+from clipmatch.render_queue import read_chat_lead
 from clipmatch.spikes import SpikeSettings
 
 
@@ -18,7 +20,9 @@ class SimulatedTwitch:
         self.created = []
         self.visible = asyncio.Event()
 
-    async def create_clip(self, channel):
+    async def create_clip(self, channel, *, on_attempt=None):
+        if on_attempt is not None:
+            on_attempt()
         self.created.append(channel)
         return "clip-" + channel
 
@@ -28,6 +32,51 @@ class SimulatedTwitch:
 
 
 class WorkerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_request_lead_survives_delayed_response_confirmation_and_restart(self):
+        now = [100.0]
+
+        class SlowResponseTwitch(SimulatedTwitch):
+            async def create_clip(self, channel, *, on_attempt=None):
+                clip_id = await super().create_clip(channel, on_attempt=on_attempt)
+                now[0] = 124.0
+                return clip_id
+
+        api = SlowResponseTwitch()
+        settings = SpikeSettings(bucket_seconds=12, min_messages=10, warmup_minutes=0)
+        with tempfile.TemporaryDirectory() as temp, patch("clipmatch.live_worker.send_discord") as webhook:
+            directory = Path(temp)
+            with closing(ClipState(directory)) as state:
+                worker = Worker(api, None, "", {"1": "channel"}, settings, state, clock=lambda: now[0])
+                worker.live("1", True)
+                await worker.drain()
+                for instant, count in ((100.5, 1), (106.25, 4), (107.25, 4), (108.25, 4)):
+                    now[0] = instant
+                    for _ in range(count):
+                        worker.chat("1", {"message": {"text": "wow"}})
+                now[0] = 112.75
+                worker.tick()
+                now[0] = 115.5  # The clip task starts after the detection tick.
+                await asyncio.sleep(0)
+                try:
+                    self.assertEqual([row[0] for row in state.pending()], ["clip-1"])
+                    self.assertEqual(read_chat_lead(directory, "clip-1"), 9.25)
+                finally:
+                    await worker.stop()
+
+            now[0] = 1000.0
+            api.visible.set()
+            with closing(ClipState(directory)) as reopened:
+                worker = Worker(api, None, "", {"1": "channel"}, settings, reopened,
+                                clock=lambda: now[0], render_queue=reopened.renders)
+                worker.resume()
+                await worker.drain()
+                self.assertEqual(reopened.pending(), [])
+                self.assertEqual(reopened.db.execute("SELECT id, status FROM render_jobs").fetchall(),
+                                 [("clip-1", "queued")])
+            self.assertEqual(read_chat_lead(directory, "clip-1"), 9.25)
+            self.assertEqual(api.created, ["1"])
+            self.assertTrue(webhook.await_args.args[2].endswith("\nhttps://clips.twitch.tv/clip-1"))
+
     async def test_live_notice_on_startup_and_after_offline_but_only_once_per_transition(self):
         with tempfile.TemporaryDirectory() as temp, closing(ClipState(Path(temp))) as state:
             worker = Worker(None, None, "", {"1": "first"}, SpikeSettings(), state)
@@ -106,22 +155,27 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
         async def webhook(_session, _url, message):
             messages.append(message)
 
-        with tempfile.TemporaryDirectory() as temp, closing(ClipState(Path(temp))) as state:
-            state.remember("saved", "channel", "spike stats")
-            worker = Worker(api, None, "", {"1": "channel"}, SpikeSettings.from_env({}), state)
-            with patch("clipmatch.live_worker.send_discord", webhook):
-                worker.resume()
-                await worker.drain()
-            self.assertEqual(api.created, [])
-            self.assertIn("https://clips.twitch.tv/saved", messages[0])
-            self.assertEqual(list(state.pending()), [])
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            with closing(sqlite3.connect(directory / "clips.sqlite3")) as db, db:
+                db.execute("CREATE TABLE pending (id TEXT PRIMARY KEY, login TEXT, summary TEXT)")
+                db.execute("INSERT INTO pending VALUES ('saved', 'channel', 'spike stats')")
+            with closing(ClipState(directory)) as state:
+                worker = Worker(api, None, "", {"1": "channel"}, SpikeSettings.from_env({}), state)
+                with patch("clipmatch.live_worker.send_discord", webhook):
+                    worker.resume()
+                    await worker.drain()
+                self.assertEqual(api.created, [])
+                self.assertIn("https://clips.twitch.tv/saved", messages[0])
+                self.assertEqual(list(state.pending()), [])
+                self.assertIsNone(read_chat_lead(directory, "saved"))
 
     async def test_restriction_posts_error_and_other_channel_still_delivers(self):
         class RestrictedTwitch(SimulatedTwitch):
-            async def create_clip(self, channel):
+            async def create_clip(self, channel, *, on_attempt=None):
                 if channel == "1":
                     raise ApiError(403, "clips disabled on this channel")
-                return await super().create_clip(channel)
+                return await super().create_clip(channel, on_attempt=on_attempt)
 
         posts = []
 

@@ -2,12 +2,16 @@ import asyncio
 import tempfile
 import unittest
 from collections import deque
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import aiohttp
 
 from clipmatch.live_api import ApiError, LiveAPI, exchange_code, save_refresh_token, send_discord
+from clipmatch.live_worker import ClipState, Worker
+from clipmatch.render_queue import read_chat_lead
+from clipmatch.spikes import SpikeSettings
 
 
 class Response:
@@ -145,6 +149,43 @@ class LiveApiTests(unittest.IsolatedAsyncioTestCase):
         with patch("asyncio.sleep", new_callable=AsyncMock) as sleep:
             self.assertEqual(await self.api.confirm_clip("slug"), public)
         sleep.assert_awaited_once_with(3)
+
+    async def test_worker_times_the_successful_post_after_token_refresh_and_rate_limit(self):
+        now = [100.0]
+        self.session.expect(401, {})
+        self.grant("renewed", "second-refresh")
+        self.session.expect(429, {}, {"Retry-After": "3"})
+        self.session.expect(202, {"data": [{"id": "slug"}]})
+        self.session.expect(200, {"data": [{"id": "slug", "url": "https://clips.twitch.tv/slug"}]})
+        transport_request = self.session.request
+
+        def request(method, url, **kwargs):
+            response = transport_request(method, url, **kwargs)
+            if url.endswith("/token"):
+                now[0] += 2
+            elif method == "POST":
+                now[0] += 5 if response.status == 202 else 1
+            return response
+
+        async def elapse(delay):
+            now[0] += delay
+
+        directory = Path(self.directory.name)
+        with (closing(ClipState(directory)) as state, patch.object(self.session, "request", side_effect=request),
+              patch("time.time", side_effect=lambda: now[0]), patch("asyncio.sleep", side_effect=elapse),
+              patch("clipmatch.live_worker.send_discord")):
+            worker = Worker(self.api, None, "", {"7": "streamer"}, SpikeSettings(min_messages=2, warmup_minutes=0),
+                            state, clock=lambda: now[0])
+            worker.live("7", True)
+            now[0] = 104.0
+            for _ in range(2):
+                worker.chat("7", {"message": {"text": "wow"}})
+            now[0] = 110.0
+            worker.tick()
+            await worker.drain()
+            # Two 2s token exchanges, two 1s rejections and a 3s rate-limit wait
+            # put the accepted POST at 119. Its response arrives at 124.
+            self.assertEqual(read_chat_lead(directory, "slug"), 15.0)
 
     async def test_ambiguous_subscription_reconciles_pages_on_current_session(self):
         kind = "channel.chat.message"

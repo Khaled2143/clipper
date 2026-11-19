@@ -1,6 +1,7 @@
 import asyncio
 from contextlib import closing
 from pathlib import Path
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -8,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 from clipmatch import live
 from clipmatch.live_worker import ClipState, Worker, WorkerConfig
+from clipmatch.render_queue import read_chat_lead
 from clipmatch.spikes import SpikeSettings
 
 
@@ -17,10 +19,54 @@ def queued_rows(state):
     ).fetchall()
 
 
+class ChatLeadReaderTests(unittest.TestCase):
+    def test_missing_state_and_legacy_or_manual_clips_need_no_writes(self):
+        with tempfile.TemporaryDirectory(prefix="clip state #") as temp:
+            directory = Path(temp)
+            self.assertIsNone(read_chat_lead(directory / "absent", "Manual"))
+            self.assertIsNone(read_chat_lead(directory, "Manual"))
+            self.assertEqual(list(directory.iterdir()), [])
+
+            database = directory / "clips.sqlite3"
+            with closing(sqlite3.connect(database)) as db, db:
+                db.execute("CREATE TABLE pending (id TEXT PRIMARY KEY, login TEXT, summary TEXT)")
+                db.execute("INSERT INTO pending VALUES ('Old', 'streamer', 'spike')")
+            original = database.read_bytes()
+            self.assertIsNone(read_chat_lead(directory, "Old"))
+            self.assertEqual(database.read_bytes(), original)
+
+            with closing(ClipState(directory)) as state:
+                self.assertEqual(state.pending(), [("Old", "streamer", "spike")])
+                state.renders.enqueue("Manual", "streamer", "https://clips.twitch.tv/Manual")
+            self.assertIsNone(read_chat_lead(directory, "Old"))
+            self.assertIsNone(read_chat_lead(directory, "Manual"))
+
+
 class RenderQueueTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.directory = Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
         self.state = self.enterContext(closing(ClipState(self.directory)))
+
+    def test_pending_confirmation_and_chat_lead_commit_together(self):
+        def reject_timing(action, table, *_args):
+            if action == sqlite3.SQLITE_INSERT and table == "clip_chat_timing":
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+
+        self.state.db.set_authorizer(reject_timing)
+        with self.assertRaises(sqlite3.DatabaseError):
+            self.state.remember("Interrupted", "streamer", "Spike", chat_lead=2.5)
+        self.state.db.set_authorizer(None)
+        self.assertEqual(self.state.pending(), [])
+        self.assertIsNone(read_chat_lead(self.directory, "Interrupted"))
+
+    def test_only_finite_nonnegative_leads_are_saved(self):
+        for clip_id, lead in (("Instant", 0), ("Future", -1), ("Unknown", float("nan")), ("Infinite", float("inf"))):
+            self.state.remember(clip_id, "streamer", "Spike", chat_lead=lead)
+        self.assertEqual(len(self.state.pending()), 4)
+        self.assertEqual(self.state.db.execute("SELECT id, lead_seconds FROM clip_chat_timing").fetchall(),
+                         [("Instant", 0.0)])
+        self.assertEqual(read_chat_lead(self.directory, "Instant"), 0.0)
 
     async def test_confirm_enqueues_before_link_delivery_and_duplicate_confirmation_is_harmless(self):
         url = "https://clips.twitch.tv/Confirmed"
@@ -133,6 +179,8 @@ class RenderQueueTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_only_explicitly_safe_child_exit_retries_with_a_bounded_backoff(self):
         queue = self.state.renders
+        self.state.remember("Retry", "streamer", "Spike", chat_lead=4.5)
+        self.state.forget("Retry")
         queue.enqueue("Retry", "streamer", "https://clips.twitch.tv/Retry")
         queue.enqueue("Unknown", "streamer", "https://clips.twitch.tv/Unknown")
         child = AsyncMock()
@@ -147,6 +195,7 @@ class RenderQueueTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(queue.retry("Unknown"))
         self.assertFalse(queue.retry("Unknown"))
         self.assertEqual(queued_rows(self.state)[1], ("Unknown", "queued", 0))
+        self.assertEqual(read_chat_lead(self.directory, "Retry"), 4.5)
 
     async def test_interrupted_running_job_waits_for_manual_retry_after_restart(self):
         self.state.renders.enqueue("Lost", "streamer", "https://clips.twitch.tv/Lost")

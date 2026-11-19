@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
+import math
 from pathlib import Path
 import re
 import sqlite3
@@ -64,6 +65,8 @@ class ClipState:
         with self.db:
             self.db.execute("CREATE TABLE IF NOT EXISTS cooldowns (channel TEXT PRIMARY KEY, fired REAL NOT NULL)")
             self.db.execute("CREATE TABLE IF NOT EXISTS pending (id TEXT PRIMARY KEY, login TEXT, summary TEXT)")
+            self.db.execute("CREATE TABLE IF NOT EXISTS clip_chat_timing "
+                            "(id TEXT PRIMARY KEY, lead_seconds REAL NOT NULL)")
         self.renders = RenderQueue(self.db, directory)
 
     def reserve(self, channel, now, cooldown):
@@ -73,9 +76,12 @@ class ClipState:
                 "WHERE cooldowns.fired <= excluded.fired - ?", (channel, now, cooldown))
             return changed.rowcount == 1
 
-    def remember(self, clip_id, login, summary):
+    def remember(self, clip_id, login, summary, chat_lead: float | None = None):
         with self.db:
-            self.db.execute("INSERT INTO pending VALUES (?, ?, ?)", (clip_id, login, summary))
+            self.db.execute("INSERT INTO pending(id, login, summary) VALUES (?, ?, ?)", (clip_id, login, summary))
+            if chat_lead is not None and 0 <= chat_lead < math.inf:
+                self.db.execute("INSERT INTO clip_chat_timing(id, lead_seconds) VALUES (?, ?) "
+                                "ON CONFLICT(id) DO NOTHING", (clip_id, chat_lead))
 
     def pending(self):
         return self.db.execute("SELECT id, login, summary FROM pending").fetchall()
@@ -173,7 +179,7 @@ class Worker:
             if bucket.spike and index == len(buckets) - 1:
                 if self.state.reserve(channel, self.wall(), self.settings.cooldown_seconds):
                     log("spike", channel=login, count=bucket.count)
-                    self._spawn(self._clip(channel, detector, self._summary(login, bucket)))
+                    self._spawn(self._clip(channel, detector, bucket))
 
     def _summary(self, login, bucket: Bucket):
         change = f"{bucket.ratio:.1f}× spike" if bucket.ratio is not None else "spike from silence"
@@ -191,17 +197,25 @@ class Worker:
             return False
         return True
 
-    async def _clip(self, channel, detector, summary):
+    async def _clip(self, channel, detector, bucket: Bucket):
         login = self.channels[channel]
         if self.detectors.get(channel) is not detector:
             log("clip_skipped", channel=login, reason="live chat monitoring ended before request")
             return
+        chat_lead = None
+
+        def mark_attempt():
+            nonlocal chat_lead
+            if bucket.rise_at is not None:
+                chat_lead = self.clock() - bucket.rise_at
+
         try:
-            clip_id = await self.api.create_clip(channel)
+            clip_id = await self.api.create_clip(channel, on_attempt=mark_attempt)
         except ApiError as exc:
             await self._clip_failed(login, exc)
             return
-        self.state.remember(clip_id, login, summary)
+        summary = self._summary(login, bucket)
+        self.state.remember(clip_id, login, summary, chat_lead)
         log("clip_requested", channel=login, clip_id=clip_id)
         await self._confirm(clip_id, login, summary)
 

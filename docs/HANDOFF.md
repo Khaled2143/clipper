@@ -1,6 +1,24 @@
 # Clipmatch handoff
 
-## Start here — November 18, 2026
+## Start here — shorter finished edits, November 18, 2026
+
+The Windows checkout on `milestone1-manual-render` now cuts finished uploads from the best landscape Twitch source. For new triggers the watcher saves when chat started rising relative to the successful clip request. The finisher considers that timing alongside changes in the game, facecam and audio. It keeps the channel label and skips generated speech captions. A source with little evidence gets a wider cut.
+
+Three archived handoff clips were rendered locally from 1080p sources. These clips predate saved chat timing. The numbers below are source times in seconds. The smaller attachments were encoded locally with the same size fallback as the watcher.
+
+| Clip | Selected window | Result |
+| --- | --- | --- |
+| Agent00 car flip | 43.50–57.75 | The warning opens the edit, the flip starts about four seconds in, and the landing and “I scratched it!” line fit. The upload-sized copy measured 4.53 Mbps video. |
+| Fanum repair menu | 35.00–53.75 | The edit followed a rise in sound during the menu. The 1.84 MB vertical master already fit the attachment budget. |
+| Kai Cenat cutscene | 32.25–53.25 | Facecam movement guided the cut. The upload-sized copy measured 3.09 Mbps video. |
+
+The Agent00 opening matched the hand-picked reference. Fanum and Kai still need an editorial listen to confirm which moment chat cared about. Windows previews and masters are under the ignored `work/timing-review/finished-edits/` directory. A previously delivered 60-second Agent00 attachment measured 0.97 Mbps video and carried the bot's size-limited encoder settings. All 149 Windows tests passed with FFmpeg and ffprobe enabled, including retries, legacy queue data, early payoffs and preserving the master after an uncertain Discord upload.
+
+**Mac rollout is pending.** Once this revision is available on the Mac, stop the existing watcher between renders, update its `.worktrees/manual-render` checkout, and restart it there with its existing `.env` and `.clipbot/` state. Completed uploads keep their queue status. Inspect the first fresh MP4 and its adjacent JSON for the selected source times, cue and chat timing. The local acceptance runs used `--render-only`. [Watcher restart command](../README.md#automatic-finished-videos)
+
+The earlier Shorts title ideas below still need an editorial choice. New finished jobs retain the Twitch title and source URL. Timed transcripts are available on older captioned jobs.
+
+## Earlier Mac handoff — November 18, 2026
 
 Pull `milestone1-manual-render` and use this branch to continue. The Mac is already watching all five configured channels. At 7:36 p.m. Eastern, its queue showed 23 completed uploads across four streamers (8 Agent00, 6 Fanum, 4 Jynxzi, and 5 Kai Cenat). It had no jobs waiting for review. The Mac has the active Twitch session and both Discord webhooks. Keep a single watcher active if you move it to another machine. [Local setup and restart command](../README.md#automatic-finished-videos)
 

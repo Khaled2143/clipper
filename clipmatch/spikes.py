@@ -68,6 +68,7 @@ class Bucket:
     ratio: float | None
     top: tuple[str, ...]
     spike: bool
+    rise_at: float | None = None
 
 
 class Detector:
@@ -77,6 +78,9 @@ class Detector:
         self._settings = settings
         self._start = start
         self._index = 0
+        self._now = start
+        self._slice_seconds = min(1.0, settings.bucket_seconds / 10)
+        self._activity: dict[int, tuple[float, int]] = {}
         self._baseline_size = int(settings.baseline_minutes * 60) // settings.bucket_seconds
         self._history: deque[int] = deque()
         self._history_total = 0
@@ -86,6 +90,10 @@ class Detector:
 
     def add(self, event: dict) -> None:
         self._count += 1
+        window_start = self._start + self._index * self._settings.bucket_seconds
+        slot = int((self._now - window_start) / self._slice_seconds)
+        first, count = self._activity.get(slot, (self._now, 0))
+        self._activity[slot] = first, count + 1
         message = event.get("message")
         if not isinstance(message, dict):
             return
@@ -121,11 +129,36 @@ class Detector:
 
     def _clear_current_bucket(self) -> None:
         self._count = 0
+        self._activity.clear()
         self._reactions.clear()
         self._display.clear()
 
+    def _rise_at(self, baseline: float) -> float | None:
+        """Find the stretch with the most messages above the local background rate."""
+        peak = max(count for _, count in self._activity.values())
+        # One third of the peak rate lets a buildup count, while quiet intervals
+        # separate incidental chatter from the reaction even on a silent baseline.
+        rate = max(baseline / self._settings.bucket_seconds, peak / (3 * self._slice_seconds))
+        previous = self._start + self._index * self._settings.bucket_seconds
+        run_start = previous
+        score = 0.0
+        best_score = 1.0  # A lone message cannot establish a rise.
+        rise = None
+        for first, count in self._activity.values():
+            score -= (first - previous) * rate
+            if score <= 0:
+                score = 0.0
+                run_start = first
+            score += count
+            if score > best_score:
+                best_score = score
+                rise = run_start
+            previous = first
+        return rise
+
     def advance(self, now: float) -> list[Bucket]:
         """Close elapsed windows, using only earlier counts for each baseline."""
+        self._now = now
         seconds = self._settings.bucket_seconds
         end_index = int((now - self._start) // seconds)
         # Compare against the actual boundary when timestamp rounding affects
@@ -159,7 +192,8 @@ class Detector:
                 and self._count >= self._settings.min_messages
                 and (ratio is None or ratio >= self._settings.spike_multiplier)
             )
-            buckets.append(Bucket(self._count, baseline, ratio, top, spike))
+            rise_at = self._rise_at(baseline) if spike else None
+            buckets.append(Bucket(self._count, baseline, ratio, top, spike, rise_at))
             self._record_count(self._count)
             self._index += 1
             self._clear_current_bucket()

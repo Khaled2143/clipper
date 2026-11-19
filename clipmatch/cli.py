@@ -1,6 +1,7 @@
 """Manual render orchestration; expensive stages have independent completion records."""
 import argparse
 import asyncio
+from collections.abc import Callable
 from dataclasses import asdict
 import json
 from pathlib import Path
@@ -16,10 +17,10 @@ from .transcribe import transcribe
 
 
 def render_job(spec: Path, config: Path | None, *, force: bool=False,
-               clean: bool=False, no_captions: bool=False, send_finished: bool=False) -> int:
+               clean: bool=False, no_captions: bool=False, send_finished: bool=False,
+               add_provenance: Callable[[dict], None] | None = None) -> int:
+    captions_enabled = not (no_captions or send_finished)
     if send_finished:
-        if no_captions:
-            raise ValueError("Finished-channel exports require transcription. Remove --no-captions.")
         try:
             from .finished import deliver_finished, finished_webhook_url
         except ModuleNotFoundError as exc:
@@ -28,8 +29,6 @@ def render_job(spec: Path, config: Path | None, *, force: bool=False,
             raise ValueError('Discord delivery requires pip install -e ".[live]".') from None
         webhook = finished_webhook_url()
     settings, clips = load_job(spec,config)
-    if settings.layout == "stacked" and no_captions:
-        raise ValueError("The stacked layout requires transcription. Remove --no-captions.")
     # A destination must never replace any input, even a later clip's source.
     sources = {Path(c.source).resolve() for c in clips
                if not c.source.startswith(('http://', 'https://'))}
@@ -73,9 +72,10 @@ def render_job(spec: Path, config: Path | None, *, force: bool=False,
             progress('acquire/validate selected window (reuse completed download when valid)')
             window = acquire(clip,settings,work,force)
             words=[]
-            warnings=['layout_requires_visual_review', 'mixed_audio_speaker_attribution_unverified']
+            warnings=['layout_requires_visual_review']
             transcript_provenance=None
-            if not no_captions:
+            if captions_enabled:
+                warnings.append('mixed_audio_speaker_attribution_unverified')
                 audio=work/'audio.wav'
                 manifest=work/'audio.manifest.json'
                 key=fingerprint(dict(stage='audio-v2',source=window.identity,trim=window.trim_start,
@@ -109,23 +109,26 @@ def render_job(spec: Path, config: Path | None, *, force: bool=False,
                 progress('render cache hit')
                 info=probe(output)
             # Sidecars regenerate cheaply, including after an interrupted sidecar write.
-            if not no_captions:
+            if captions_enabled:
                 write_captions(words,output.with_suffix('.ass'),output.with_suffix('.srt'),window.duration,settings)
             else:
                 output.with_suffix('.ass').unlink(missing_ok=True)
                 output.with_suffix('.srt').unlink(missing_ok=True)
             def save_sidecar(selected_clean, clean_status):
-                atomic_json(output.with_suffix('.json'),dict(
+                data = dict(
                     version=1,clipmatch=__version__,clip_id=clip.id,status='manual_render_unreviewed',
                     source=dict(url_or_path=clip.source,identity=window.identity,start=clip.start,end=clip.end),
                     hook=clip.hook,label=clip.label,facecam_rect=clip.facecam_rect,
                     output=dict(path=output.name,**asdict(info)),
                     clean_output=selected_clean.name if selected_clean else None, clean_export_status=clean_status,
-                    captions_enabled=not no_captions,transcription=transcript_provenance,fonts=fonts,
-                    tools=tool_versions(),warnings=warnings))
-            save_sidecar(None, 'pending_or_failed' if clean else 'not_requested')
+                    captions_enabled=captions_enabled,transcription=transcript_provenance,fonts=fonts,
+                    tools=tool_versions(),warnings=warnings)
+                if add_provenance is not None:
+                    add_provenance(data)
+                atomic_json(output.with_suffix('.json'), data)
             clean_output=None
             if clean:
+                save_sidecar(None, 'pending_or_failed')
                 clean_output=output.with_name(clip.id+'.clean.mp4')
                 clean_manifest=clean_output.with_suffix('.manifest.json')
                 clean_key=render_key(clip,window,[],settings,True,fonts)
@@ -156,10 +159,11 @@ def main(argv: list[str] | None=None) -> int:
     render=sub.add_parser('render-manual',help='Render independent clips from a YAML specification')
     render.add_argument('spec',type=Path)
     render.add_argument('--config',type=Path,help='Optional config YAML; output/work paths resolve beside it')
-    render.add_argument('--force',action='store_true',help='Rerun acquisition, audio, transcription and rendering for this job')
+    render.add_argument('--force',action='store_true',help='Rerun the selected media stages even when cached')
     render.add_argument('--clean',action='store_true',help='Also export video without burned-in text for CapCut')
     render.add_argument('--no-captions',action='store_true',help='Skip transcription and captions; hook and label remain')
-    render.add_argument('--send-finished', action='store_true', help='Upload each finished MP4 to the finished-clips Discord channel')
+    render.add_argument('--send-finished', action='store_true',
+                        help='Render without speech captions and upload each MP4 to the finished-clips Discord channel')
     args=parser.parse_args(argv)
     try:
         return render_job(args.spec,args.config,force=args.force,clean=args.clean,no_captions=args.no_captions,
