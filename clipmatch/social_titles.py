@@ -108,7 +108,8 @@ def ask_model(model, encoded, context, prompt, schema):
                    options=dict(temperature=0, seed=1, num_predict=320, num_ctx=4096),
                    messages=[dict(role="system", content=prompt),
                              dict(role="user", content=json.dumps(context), images=[encoded])])
-    request = Request("http://127.0.0.1:11434/api/chat", data=json.dumps(payload).encode(),
+    base_url = setting("SOCIAL_OLLAMA_URL") or "http://127.0.0.1:11434"
+    request = Request(f"{base_url.rstrip('/')}/api/chat", data=json.dumps(payload).encode(),
                       headers={"Content-Type": "application/json"})
     with urlopen(request, timeout=90) as response:
         answer = json.load(response)

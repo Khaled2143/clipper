@@ -51,13 +51,15 @@ To inspect an earlier source locally, run `python -m clipmatch.finish_clip --sta
 
 ### Shared YouTube Shorts title and TikTok description
 
-On Windows, install Ollama and run `ollama pull qwen3-vl:8b-instruct`. Set `SOCIAL_VISION_MODEL=qwen3-vl:8b-instruct` in the watcher's `.env`. Keep Ollama running on its default loopback port 11434. For speech context, install the transcription extra and set `SOCIAL_SPEECH_MODEL` to a local faster-whisper model directory. Without a cached speech model the writer uses frames alone.
+On Windows, install Ollama and run `ollama pull qwen3-vl:8b-instruct`. Set `SOCIAL_VISION_MODEL=qwen3-vl:8b-instruct` in the watcher's `.env`. The watcher connects to loopback port 11434 by default. On Railway, set `SOCIAL_OLLAMA_URL` to your Ollama service's private address (for example, `http://ollama.railway.internal:11434`) and install the selected vision model on that service. For speech context, install the transcription extra and set `SOCIAL_SPEECH_MODEL` to a cached faster-whisper model in the worker's filesystem. Without a cached speech model the writer uses frames alone.
 
 For each new live MP4 the writer samples six frames from the final cut, reads the audio locally when available and checks proposed titles against the streamer's previous 100 titles. The first line of the Discord post can be copied to either platform. A one-line YouTube description and the original Twitch URL follow. The adjacent `.social.json` retains the copy. When the model is unavailable or its suggestions repeat previous titles, Discord still gets the MP4 and a title-review notice.
 
 ### Run on Railway
 
 Deploy this repository as a **single worker** from the directory containing `railway.toml`. Attach a volume at `/data`. In Railway Variables set the same client ID, secret, channels, and `DISCORD_WEBHOOK_URL`. To publish finished videos, also set `DISCORD_FINISHED_WEBHOOK_URL`. Stop the local watcher before transferring its current `TWITCH_REFRESH_TOKEN` from the local `.clipbot/refresh-token` file. The worker uses Railway's volume mount path for its rotated token, pending confirmations, cooldowns, render queue, and finished clips. The repository supplies the container, start command, and restart policy. The worker uses outbound connections and requires no public domain.
+
+When moving an existing watcher, let the current render finish and stop the local process between jobs. With both watchers stopped, copy the contents of its state directory to the mounted volume before starting the hosted watcher. This preserves queue history, finished media, Discord receipts and per-channel title history. Compare the queue counts at cutover. Size the volume for the existing archive plus new recordings; the worker retains the original Twitch footage and the vertical master for each completed clip.
 
 ### Check the first live run
 

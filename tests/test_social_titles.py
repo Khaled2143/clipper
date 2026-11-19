@@ -1,6 +1,9 @@
 import json
+import os
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 import tempfile
+from threading import Thread
 import unittest
 from unittest.mock import patch
 
@@ -13,6 +16,32 @@ class SocialTitleTests(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)
         self.url = "https://clips.twitch.tv/Box"
+
+    def test_title_request_reaches_configured_ollama_service(self):
+        requests = []
+
+        class Ollama(BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers["Content-Length"]))
+                requests.append((self.path, json.loads(body)["model"]))
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'{"message":{"content":"{}"}}')
+
+            def log_message(self, *args):
+                pass
+
+        with HTTPServer(("127.0.0.1", 0), Ollama) as server:
+            thread = Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                address = f"http://127.0.0.1:{server.server_port}/"
+                with patch.dict(os.environ, SOCIAL_OLLAMA_URL=address):
+                    social_titles.ask_model("fixture-model", "", {}, "test", {})
+            finally:
+                server.shutdown()
+                thread.join()
+        self.assertEqual(requests, [("/api/chat", "fixture-model")])
 
     def prepare(self, slug, candidates):
         master = self.root / "jynxzi" / slug / "renders" / "clip.mp4"
