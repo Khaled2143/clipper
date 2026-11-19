@@ -1,6 +1,34 @@
 # Clipmatch handoff
 
-## Resume here — November 18, 2026
+## Start here — November 18, 2026
+
+Pull `milestone1-manual-render` and use this branch to continue. The Mac is already watching all five configured channels. At 7:36 p.m. Eastern, its queue showed 23 completed uploads across four streamers (8 Agent00, 6 Fanum, 4 Jynxzi, and 5 Kai Cenat). It had no jobs waiting for review. The Mac has the active Twitch session and both Discord webhooks. Keep a single watcher active if you move it to another machine. [Local setup and restart command](../README.md#automatic-finished-videos)
+
+**YouTube Shorts titles are next.** The owner wants copy to go alongside each MP4 in the finished Discord channel. The current post contains the playable video alone. The last discussion proposed a title, a one-line description, and the original Twitch link. The editorial style is still open. Two different Fanum clips carried the same Twitch stream title, so copying that field alone would give them identical headlines. Each clip already has its Twitch title and URL in `source.json` and timed words in `work/<clip>/transcript.json`.
+
+For the Fanum sink-repair clip, the two examples discussed were **“Can I Use This Wrench?” | Fanum Plays GTA 6** (a line from the transcript) and **Fanum Has One Concern About This GTA 6 Sink Repair** (a headline written for the moment). Use these to settle the style with the owner. The fixed-script constraint still applies. `clipmatch/finished.py` builds the Discord attachment post.
+
+## Automatic finished videos — November 18, 2026
+
+The Mac watcher now sends confirmed Twitch links and live notices to the original Discord channel and uploads playable MP4s to the finished channel. An earlier Agent00 clip was queued for the first delivery. Discord confirmed the attachment at 6:32 p.m. Eastern. The master is 60 seconds long with 1080×1920 H.264 video and AAC audio. A frame check showed Agent00's facecam above gameplay with locally transcribed words burned into the picture. [Source clip](https://www.twitch.tv/agent00/clip/CovertDoubtfulBillKAPOW--bw1uFkCIa6BJc-d)
+
+The first new live trigger came from Fanum at 6:36:44 p.m. Eastern. The original channel received the Twitch link seven seconds later. At 6:38:28 p.m., Discord had confirmed the finished MP4, one minute and 44 seconds after the spike. The saved upload receipt matched the local 60-second master. A frame check showed Fanum above the gameplay with a timed caption. [Fanum source clip](https://clips.twitch.tv/TsundereAcceptablePotatoChefFrank-E61NUL4Uw1zfSYLc)
+
+A Kai Cenat chat spike at 6:37:55 p.m. also produced a Twitch clip. The original link arrived at 6:38:14 p.m. and the finished video at 6:39:40 p.m. The queue and Discord receipt confirmed delivery on the first render attempt. [Kai Cenat source clip](https://clips.twitch.tv/ToughVenomousWitchPunchTrees-ttVnELyxOnAzX6U8)
+
+One watcher runs under `caffeinate -i`. It covers Agent00, Fanum, Jynxzi, Kai Cenat, and YourRAGEGaming. Each has a fixed facecam crop in `clipmatch/layouts.json` sampled from four public clips. Check the crop when a streamer changes scenes. Homebrew's `ffmpeg-full` is on the watcher's PATH, and the local Whisper `small` model is cached. The transcription extra pins PyAV below 19 for compatibility with the installed faster-whisper decoder.
+
+The queue, source files, full-quality masters, and Discord receipts persist under `.clipbot/` in the `.worktrees/manual-render` checkout. Check any job marked `render_review` before requeuing it. All 118 tests passed on the Mac with the media dependencies installed. Hosted deployment and the 24-hour disconnect test remain pending. [Start and operate the watcher](../README.md#automatic-finished-videos)
+
+## Mac live test — November 18, 2026
+
+The first real Twitch-to-Discord delivery succeeded on the Mac. Agent00's chat reached 41 messages in 10 seconds. The worker detected the spike and requested a clip at 2:53:15 p.m. Eastern. Discord confirmed delivery at 2:53:18 p.m., three seconds after detection (target 30 seconds). The 60-second clip shows a drive from a tunnel onto a highway, a car flipping near the end, and driving afterward. This review used sampled video frames. The audio and the cause of the chat reaction still need playback review. [First Agent00 clip](https://www.twitch.tv/agent00/clip/CovertDoubtfulBillKAPOW--bw1uFkCIa6BJc-d)
+
+The local worker now posts a Discord notice when it begins watching a live channel, including channels already live at startup. A reconnect during the same live session suppresses a duplicate notice. The Mac test suite ran 89 tests with 83 passing and six media tests skipped. Twitch returned HTTP 403 for a later Kai Cenat clip request. Chat monitoring continued.
+
+The watcher was left running on the Mac under `caffeinate -i` for the local test. Before a move to Railway, review the clip with audio, stop the local worker, then follow the single-worker volume instructions below. The 24-hour hosted run and disconnect check remain pending.
+
+## Previous Windows handoff — November 18, 2026
 
 **Next session starts with the first live Twitch-to-Discord clip.** The worker is installed in the Windows checkout on branch `milestone1-manual-render`. This branch contains both the new live worker and the earlier manual vertical renderer.
 

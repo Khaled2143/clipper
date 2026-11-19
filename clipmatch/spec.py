@@ -29,6 +29,7 @@ class Settings:
     fps: int = 30
     output_dir: Path = Path("renders")
     work_dir: Path = Path("work")
+    layout: str = "manual"
 
 
 def _unknown(data, allowed, context):
@@ -92,6 +93,8 @@ def parse_job(data: dict, root: Path, config: dict | None = None,
     for name in ('output_dir', 'work_dir'):
         options[name] = _path(options.get(name, 'renders' if name == 'output_dir' else 'work'), destination_root)
     settings = Settings(**options)
+    if settings.layout not in ("manual", "stacked"):
+        raise ValueError("layout must be manual or stacked")
     for name, low, high in [('crf', 0, 51), ('fps', 1, 60)]:
         value = getattr(settings, name)
         if type(value) is not int or not low <= value <= high:
@@ -116,7 +119,8 @@ def parse_job(data: dict, root: Path, config: dict | None = None,
     clips, seen = [], set()
     for raw in raw_clips:
         _unknown(raw, {f.name for f in fields(ClipSpec)}, 'clip')
-        required = {'id', 'source', 'start', 'end', 'label', 'hook'}
+        required = {'id', 'source', 'start', 'end', 'label'}
+        required.add('facecam_rect' if settings.layout == 'stacked' else 'hook')
         if not required <= raw.keys():
             raise ValueError(f"Missing clip fields: {', '.join(sorted(required - raw.keys()))}")
         name = _text(raw['id'], 'id')
@@ -142,8 +146,13 @@ def parse_job(data: dict, root: Path, config: dict | None = None,
                     or rect[0] < 0 or rect[1] < 0 or rect[2] <= 0 or rect[3] <= 0):
                 raise ValueError("facecam_rect must be [x, y, positive_width, positive_height]")
             rect = tuple(rect)
-        clips.append(ClipSpec(name, source, start, end, _text(raw['label'], 'label'),
-                              _text(raw['hook'], 'hook'), rect))
+        if settings.layout == 'stacked':
+            if rect is None or raw.get('hook', '') != '':
+                raise ValueError("The stacked layout requires facecam_rect and no hook.")
+            hook = ''
+        else:
+            hook = _text(raw['hook'], 'hook')
+        clips.append(ClipSpec(name, source, start, end, _text(raw['label'], 'label'), hook, rect))
     return settings, clips
 
 

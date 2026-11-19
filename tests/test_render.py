@@ -1,5 +1,7 @@
 import tempfile
 import unittest
+import shutil
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,6 +13,41 @@ from clipmatch.captions import overlay_events
 
 
 class RenderTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("ffmpeg"), "FFmpeg needed to inspect layout pixels")
+    def test_stacked_frames_fill_both_panels_with_facecam_and_center_gameplay(self):
+        # Source has a red facecam on the left and blue gameplay across the center.
+        argv = ["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+                "color=blue:size=320x180,drawbox=x=0:y=0:w=64:h=50:color=red:t=fill",
+                "-filter_complex", layout_filter((0, 0, 64, 50), 30, "stacked"),
+                "-map", "[base]", "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
+        frame = subprocess.check_output(argv)
+        self.assertEqual(len(frame), 1080 * 1920 * 3)
+        for row, channel in [(0, 0), (719, 0), (720, 2), (1919, 2)]:
+            for x in (0, 540, 1079):
+                start = (row * 1080 + x) * 3
+                self.assertGreater(frame[start + channel], 220, f"pixel at {x},{row}")
+
+    def test_automatic_overlays_show_only_the_streamer_and_words(self):
+        from clipmatch.captions import caption_events
+        label, = overlay_events("", "agent00", 5, "stacked")
+        self.assertIn("agent00", label)
+        self.assertIn(",Label,", label)
+        self.assertNotIn(",Hook,", label)
+        words = [Word(0, 1, "Hello"), Word(1, 2, "there")]
+        events = caption_events(words, 2, "stacked")
+        self.assertEqual(len(events), 2)
+        self.assertIn(r"\pos(510,836)", events[0])
+        self.assertIn("Hello", events[0])
+
+    def test_stack_rerenders_while_legacy_manual_cache_keys_still_match(self):
+        clip = ClipSpec("one", "source.mp4", 2, 8, "A", "Hi", (0, 0, 320, 180))
+        window = SourceWindow(Path("source.mp4"), 0, 2, 6, "abc")
+        words = [Word(0, 1, "hi")]
+        with patch("clipmatch.render.tool_versions", return_value={}):
+            legacy_key = render_key(clip, window, words, Settings(), False, {})
+            self.assertEqual(legacy_key, "2ddd2b6fe736fd5ef2492079f92032f0b75f5f35e61155d15d0bdfd82658d6ba")
+            self.assertNotEqual(render_key(clip, window, words, Settings(layout="stacked"), False, {}), legacy_key)
+
     def test_crop_bounds(self):
         info = MediaInfo(1920,1080,5,True)
         validate_crop((1500,0,420,300),info)

@@ -115,9 +115,11 @@ class LiveFlowTests(unittest.IsolatedAsyncioTestCase):
             return web.json_response({"data": [{"id": clip_id, "url": public_url}]})
 
         async def webhook(request):
-            delivery_order.append("discord")
-            discord_messages.append(await request.json())
-            webhook_received.set()
+            message = await request.json()
+            discord_messages.append(message)
+            if message["content"].endswith(public_url):
+                delivery_order.append("discord")
+                webhook_received.set()
             return web.json_response({"id": "discord-message"})
 
         @web.middleware
@@ -176,7 +178,8 @@ class LiveFlowTests(unittest.IsolatedAsyncioTestCase):
         chat_sub = next(sub for sub in subscriptions if sub["type"] == "channel.chat.message")
         self.assertEqual(chat_sub["condition"], {"broadcaster_user_id": "20", "user_id": "10"})
         self.assertEqual(delivery_order, ["create", "pending", "confirmed", "discord"])
-        [message] = discord_messages
+        [notice, message] = discord_messages
+        self.assertEqual(notice["content"], "[channel] live — watching chat for clips.")
         self.assertIn("[channel]", message["content"])
         self.assertIn("Top chat: W", message["content"])
         self.assertTrue(message["content"].endswith(public_url))

@@ -1,5 +1,6 @@
 """Manual render orchestration; expensive stages have independent completion records."""
 import argparse
+import asyncio
 from dataclasses import asdict
 import json
 from pathlib import Path
@@ -15,8 +16,20 @@ from .transcribe import transcribe
 
 
 def render_job(spec: Path, config: Path | None, *, force: bool=False,
-               clean: bool=False, no_captions: bool=False) -> int:
+               clean: bool=False, no_captions: bool=False, send_finished: bool=False) -> int:
+    if send_finished:
+        if no_captions:
+            raise ValueError("Finished-channel exports require transcription. Remove --no-captions.")
+        try:
+            from .finished import deliver_finished, finished_webhook_url
+        except ModuleNotFoundError as exc:
+            if exc.name not in {"aiohttp", "dotenv"}:
+                raise
+            raise ValueError('Discord delivery requires pip install -e ".[live]".') from None
+        webhook = finished_webhook_url()
     settings, clips = load_job(spec,config)
+    if settings.layout == "stacked" and no_captions:
+        raise ValueError("The stacked layout requires transcription. Remove --no-captions.")
     # A destination must never replace any input, even a later clip's source.
     sources = {Path(c.source).resolve() for c in clips
                if not c.source.startswith(('http://', 'https://'))}
@@ -24,11 +37,15 @@ def render_job(spec: Path, config: Path | None, *, force: bool=False,
     if config:
         protected.add(config.resolve())
     for c in clips:
+        if send_finished and c.facecam_rect is None:
+            raise ValueError(f"{c.id}: set facecam_rect for the finished channel's facecam-over-gameplay layout.")
         destinations = [settings.output_dir / (c.id + suffix)
                         for suffix in ('.mp4', '.ass', '.srt', '.json', '.manifest.json')]
         if clean:
             destinations += [settings.output_dir / (c.id + suffix)
                              for suffix in ('.clean.mp4', '.clean.manifest.json')]
+        if send_finished:
+            destinations.append(settings.work_dir / c.id / 'finished-discord.json')
         destinations += [settings.work_dir / c.id / name for name in
                          ('audio.wav', 'audio.manifest.json', 'transcript.json',
                           'transcript.manifest.json', 'section.mp4', 'section.manifest.json',
@@ -37,7 +54,7 @@ def render_job(spec: Path, config: Path | None, *, force: bool=False,
             raise ValueError(f'{c.id}: output/cache destination collides with a protected input')
     # Reject cheap, deterministic errors for the entire batch before downloading anything.
     for clip in clips:
-        overlay_events(clip.hook,clip.label,clip.end-clip.start)
+        overlay_events(clip.hook,clip.label,clip.end-clip.start,settings.layout)
     preflight()
     for clip in clips:
         if not clip.source.startswith(('http://','https://')):
@@ -120,6 +137,9 @@ def render_job(spec: Path, config: Path | None, *, force: bool=False,
                     progress('clean export cache hit')
             save_sidecar(clean_output, 'complete' if clean else 'not_requested')
             progress(f'ready for manual review: {output}')
+            if send_finished:
+                sent = asyncio.run(deliver_finished(output, work / 'finished-discord.json', webhook))
+                progress('uploaded MP4 to finished channel' if sent else 'MP4 already delivered to finished channel')
         except (OSError,ValueError,RuntimeError) as exc:
             failures+=1
             # Error text from media subprocesses is sanitized at their boundary.
@@ -139,9 +159,11 @@ def main(argv: list[str] | None=None) -> int:
     render.add_argument('--force',action='store_true',help='Rerun acquisition, audio, transcription and rendering for this job')
     render.add_argument('--clean',action='store_true',help='Also export video without burned-in text for CapCut')
     render.add_argument('--no-captions',action='store_true',help='Skip transcription and captions; hook and label remain')
+    render.add_argument('--send-finished', action='store_true', help='Upload each finished MP4 to the finished-clips Discord channel')
     args=parser.parse_args(argv)
     try:
-        return render_job(args.spec,args.config,force=args.force,clean=args.clean,no_captions=args.no_captions)
+        return render_job(args.spec,args.config,force=args.force,clean=args.clean,no_captions=args.no_captions,
+                          send_finished=args.send_finished)
     except (OSError,ValueError) as exc:
         print(f'clipmatch: {exc}',file=sys.stderr)
         return 1

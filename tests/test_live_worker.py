@@ -28,6 +28,24 @@ class SimulatedTwitch:
 
 
 class WorkerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_live_notice_on_startup_and_after_offline_but_only_once_per_transition(self):
+        with tempfile.TemporaryDirectory() as temp, closing(ClipState(Path(temp))) as state:
+            worker = Worker(None, None, "", {"1": "first"}, SpikeSettings(), state)
+            with patch("clipmatch.live_worker.send_discord") as webhook:
+                worker.live("1", True)
+                worker.gap()
+                worker.live("1", True)
+                worker.live("1", False)
+                worker.live("1", False)
+                worker.live("1", True)
+                await worker.drain()
+            messages = [call.args[2] for call in webhook.await_args_list]
+            self.assertEqual(messages, [
+                "[first] live — watching chat for clips.",
+                "[first] offline — chat monitoring paused.",
+                "[first] live — watching chat for clips.",
+            ])
+
     async def test_spike_sends_one_confirmed_link_and_restart_preserves_cooldown(self):
         received = []
 
@@ -46,6 +64,7 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
                     worker = Worker(api, session, str(server.make_url("/hook")), {"1": "first", "2": "other"},
                                     settings, state, clock=lambda: now[0], wall=lambda: 1000 + now[0])
                     worker.live("1", True)
+                    await worker.drain()
                     chat = {"message": {"text": "W", "fragments": [{"type": "text", "text": "W"}]}}
                     for _ in range(5):
                         worker.chat("1", chat)
@@ -57,7 +76,7 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
                     worker.tick()
                     await asyncio.sleep(0)
                     self.assertEqual(api.created, ["1"])
-                    self.assertEqual(received, [])
+                    self.assertEqual([post["content"] for post in received], ["[first] live — watching chat for clips."])
                     self.assertEqual(len(state.pending()), 1)
                     for _ in range(70):
                         worker.chat("1", chat)
@@ -67,11 +86,12 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
                     api.visible.set()
                     await worker.drain()
                     self.assertEqual(api.created, ["1"])
-                    self.assertEqual(len(received), 1)
-                    self.assertIn("4.2", received[0]["content"])
-                    self.assertIn("W", received[0]["content"])
-                    self.assertIn("https://clips.twitch.tv/clip-1", received[0]["content"])
-                    self.assertEqual(received[0]["allowed_mentions"], {"parse": []})
+                    self.assertEqual(len(received), 2)
+                    clip = received[1]
+                    self.assertIn("4.2", clip["content"])
+                    self.assertIn("W", clip["content"])
+                    self.assertIn("https://clips.twitch.tv/clip-1", clip["content"])
+                    self.assertEqual(clip["allowed_mentions"], {"parse": []})
                     self.assertEqual(list(state.pending()), [])
                 with closing(ClipState(Path(temp))) as reopened:
                     self.assertFalse(reopened.reserve("1", 1109, 90))
@@ -154,8 +174,9 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as temp, closing(ClipState(Path(temp))) as state:
             now = [0]
             worker = Worker(None, None, "", {"1": "channel"}, SpikeSettings(), state, clock=lambda: now[0])
-            with patch("clipmatch.live_worker.log") as output:
+            with patch("clipmatch.live_worker.log") as output, patch("clipmatch.live_worker.send_discord"):
                 worker.live("1", True)
+                await worker.drain()
                 worker.chat("1", {"message": {"text": "hello " + "W" * 200}})
                 now[0] = 10
                 worker.tick()

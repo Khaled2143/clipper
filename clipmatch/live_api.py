@@ -3,10 +3,12 @@
 import asyncio
 import math
 import os
+import re
 import tempfile
 import time
 from collections.abc import Iterable
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import aiohttp
 
@@ -17,8 +19,9 @@ REQUIRED_SCOPES = {"user:read:chat", "clips:edit"}
 
 
 class ApiError(RuntimeError):
-    def __init__(self, status: int, message: str):
+    def __init__(self, status: int, message: str, *, code: int | None = None):
         self.status = status
+        self.code = code
         super().__init__(message)
 
 
@@ -82,7 +85,7 @@ def _clip_error(status, body):
     return f"Twitch clip creation returned HTTP 403 ({reason})"
 
 
-async def _request(session, service, method, url, *, attempts=3, bucket=None, **kwargs):
+async def _request(session, service, method, url, *, attempts=3, bucket=None, timeout_seconds=15, **kwargs):
     # Replay only explicit throttling responses. A lost POST response can mean
     # the service already created the clip, subscription, or Discord message.
     creating_clip = method == "POST" and url == f"{HELIX}/clips"
@@ -97,7 +100,7 @@ async def _request(session, service, method, url, *, attempts=3, bucket=None, **
                 wait_budget -= delay
         try:
             async with session.request(
-                method, url, allow_redirects=False, timeout=aiohttp.ClientTimeout(total=15), **kwargs
+                method, url, allow_redirects=False, timeout=aiohttp.ClientTimeout(total=timeout_seconds), **kwargs
             ) as response:
                 status = response.status
                 headers = response.headers
@@ -125,7 +128,8 @@ async def _request(session, service, method, url, *, attempts=3, bucket=None, **
                 continue
         if creating_clip:
             raise ApiError(status, _clip_error(status, error_body))
-        raise ApiError(status, f"{service} returned HTTP {status}")
+        code = error_body.get("code")
+        raise ApiError(status, f"{service} returned HTTP {status}", code=code if type(code) is int else None)
 
 
 def _rows(body):
@@ -296,6 +300,16 @@ class LiveAPI:
                     await asyncio.sleep(3)
         except TimeoutError:
             raise ApiError(504, "Twitch did not confirm the clip within 60 seconds") from None
+
+
+def discord_webhook_url(value: str, setting: str) -> str:
+    value = value.strip()
+    url = urlsplit(value)
+    if (url.scheme != "https" or url.netloc not in {"discord.com", "canary.discord.com",
+            "ptb.discord.com", "discordapp.com"} or url.fragment or url.query
+            or not re.fullmatch(r"/api/(?:v[0-9]+/)?webhooks/[0-9]+/[\w.-]+", url.path)):
+        raise ValueError(f"{setting} must be a Discord webhook URL.")
+    return value
 
 
 async def send_discord(session, webhook_url: str, message: str) -> None:

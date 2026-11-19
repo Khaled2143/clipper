@@ -1,4 +1,5 @@
 import json
+from importlib.util import find_spec
 import tempfile
 from types import SimpleNamespace as NS
 import unittest
@@ -12,6 +13,17 @@ from clipmatch.captions import write_captions, escape_ass, ass_document
 
 
 class CaptionTests(unittest.TestCase):
+    @unittest.skipUnless(find_spec("faster_whisper"), "Install the transcription extra to check the audio decoder")
+    def test_speech_decoder_reads_the_renderer_pcm_format(self):
+        from faster_whisper.audio import decode_audio
+
+        with tempfile.TemporaryDirectory() as directory:
+            wav = Path(directory) / "clip.wav"
+            with wave.open(str(wav), "wb") as output:
+                output.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+                output.writeframes(b"\0\0" * 16000)
+            self.assertEqual(len(decode_audio(str(wav))), 16000)
+
     def test_timestamps_escaping_and_empty_transcript(self):
         with tempfile.TemporaryDirectory() as d:
             ass, srt = Path(d)/'a.ass', Path(d)/'a.srt'

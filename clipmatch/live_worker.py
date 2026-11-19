@@ -8,9 +8,9 @@ from pathlib import Path
 import re
 import sqlite3
 import time
-from urllib.parse import urlsplit
 
-from .live_api import ApiError, send_discord
+from .live_api import ApiError, discord_webhook_url, send_discord
+from .render_queue import RenderQueue
 from .spikes import Bucket, Detector, SpikeSettings
 
 
@@ -39,25 +39,24 @@ class WorkerConfig:
     channels: tuple[str, ...]
     state_dir: Path
     settings: SpikeSettings
+    finish_clips: bool = False
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]):
         channels = tuple(dict.fromkeys(s.strip().lower() for s in required(env, "CHANNELS").split(",")))
         if any(not re.fullmatch(r"[a-z0-9_]{1,25}", name) for name in channels):
             raise ValueError("CHANNELS must be a comma-separated list of Twitch logins.")
-        webhook = required(env, "DISCORD_WEBHOOK_URL")
-        url = urlsplit(webhook)
-        if (url.scheme != "https" or url.netloc not in {"discord.com", "canary.discord.com",
-                "ptb.discord.com", "discordapp.com"} or url.fragment or url.query
-                or not re.fullmatch(r"/api/(?:v[0-9]+/)?webhooks/[0-9]+/[\w.-]+", url.path)):
-            raise ValueError("DISCORD_WEBHOOK_URL must be a Discord webhook URL.")
+        webhook = discord_webhook_url(required(env, "DISCORD_WEBHOOK_URL"), "DISCORD_WEBHOOK_URL")
+        finished = env.get("DISCORD_FINISHED_WEBHOOK_URL", "").strip()
+        if finished:
+            discord_webhook_url(finished, "DISCORD_FINISHED_WEBHOOK_URL")
         return cls(required(env, "TWITCH_CLIENT_ID"), required(env, "TWITCH_CLIENT_SECRET"),
                    env.get("TWITCH_REFRESH_TOKEN", "").strip(), webhook, channels,
-                   state_directory(env), SpikeSettings.from_env(env))
+                   state_directory(env), SpikeSettings.from_env(env), finish_clips=bool(finished))
 
 
 class ClipState:
-    """Persist cooldown reservations and IDs awaiting confirmation on the worker volume."""
+    """Keep cooldowns, pending confirmations, and render jobs on the worker volume."""
 
     def __init__(self, directory: Path):
         directory.mkdir(parents=True, exist_ok=True)
@@ -65,6 +64,7 @@ class ClipState:
         with self.db:
             self.db.execute("CREATE TABLE IF NOT EXISTS cooldowns (channel TEXT PRIMARY KEY, fired REAL NOT NULL)")
             self.db.execute("CREATE TABLE IF NOT EXISTS pending (id TEXT PRIMARY KEY, login TEXT, summary TEXT)")
+        self.renders = RenderQueue(self.db, directory)
 
     def reserve(self, channel, now, cooldown):
         with self.db:
@@ -90,13 +90,14 @@ class ClipState:
 
 class Worker:
     def __init__(self, api, session, webhook, channels, settings, state, *,
-                 clock=time.monotonic, wall=time.time):
+                 clock=time.monotonic, wall=time.time, render_queue=None):
         self.api = api
         self.session = session
         self.webhook = webhook
         self.channels = channels
         self.settings = settings
         self.state = state
+        self.render_queue = render_queue
         self.clock = clock
         self.wall = wall
         self.detectors = {}
@@ -141,8 +142,8 @@ class Worker:
             self.detectors.pop(channel, None)
         if previous != online:
             log("online" if online else "offline", channel=login)
-            if not online:
-                self._spawn(self._post(login, f"[{login}] offline — chat monitoring paused."))
+            notice = "live — watching chat for clips." if online else "offline — chat monitoring paused."
+            self._spawn(self._post(login, f"[{login}] {notice}"))
 
     def channel_error(self, channel, reason):
         login = self.channels.get(channel, channel)
@@ -214,6 +215,8 @@ class Worker:
         except ApiError as exc:
             await self._clip_failed(login, exc)
         else:
+            if self.render_queue is not None and self.render_queue.enqueue(clip_id, login, url):
+                log("render_queued", channel=login, clip_id=clip_id)
             delivered = await self._post(login, f"{summary}\n{url}")
             log("clip_result", channel=login, url=url, delivered=delivered)
         self.state.forget(clip_id)

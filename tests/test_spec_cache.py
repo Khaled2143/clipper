@@ -42,6 +42,16 @@ class SpecTests(unittest.TestCase):
             with self.subTest(settings=settings), self.assertRaises(ValueError):
                 self.parse(settings=settings)
 
+    def test_stacked_job_has_a_facecam_and_omits_the_manual_hook(self):
+        clip = {**self.clip, "facecam_rect": [0, 0, 100, 100]}
+        del clip["hook"]
+        _, (stacked,) = self.parse([clip], settings={"layout": "stacked"})
+        self.assertEqual(stacked.hook, "")
+        with self.assertRaisesRegex(ValueError, "hook"):
+            self.parse([clip])
+        with self.assertRaisesRegex(ValueError, "facecam_rect"):
+            self.parse([{**clip, "facecam_rect": None}], settings={"layout": "stacked"})
+
     def test_yaml_loading_and_explicit_config_paths(self):
         spec = self.root / 'job.yaml'
         spec.write_text('version: 1\nclips:\n  - id: first\n    source: a.mp4\n    start: 0\n    end: 2\n    label: A\n    hook: Hi\n')

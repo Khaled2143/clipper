@@ -19,8 +19,21 @@ def validate_crop(rect: tuple[int,int,int,int] | None, info: MediaInfo) -> None:
         raise ValueError('facecam_rect exceeds source frame bounds')
 
 
-def layout_filter(rect: tuple[int,int,int,int] | None, fps: int) -> str:
+def layout_filter(rect: tuple[int,int,int,int] | None, fps: int, layout: str = 'manual') -> str:
     source = f'[0:v:0]scale=trunc(iw*sar/2)*2:ih,setsar=1,fps={fps}'
+    if layout == 'stacked':
+        if rect is None:
+            raise ValueError('The stacked layout requires facecam_rect.')
+        x, y, w, h = rect
+        # Work in square pixels before scaling either panel to cover its entire area.
+        square = 'scale=trunc(iw*sar/2)*2:ih,setsar=1'
+        def cover(height):
+            return (f'scale=1080:{height}:force_original_aspect_ratio=increase:'
+                    f'force_divisible_by=2,crop=1080:{height},setsar=1')
+        return (f'[0:v:0]split=2[camsrc][gamesrc];'
+                f'[camsrc]crop={w}:{h}:{x}:{y},{square},{cover(720)}[cam];'
+                f'[gamesrc]{square},{cover(1200)}[game];'
+                f'[cam][game]vstack=inputs=2:shortest=1,fps={fps},setsar=1[base]')
     if rect is None:
         return (source+',split=2[bgsrc][fgsrc];'
                 '[bgsrc]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,'
@@ -91,7 +104,8 @@ def render_key(clip: ClipSpec, window: SourceWindow, words: list[Word],
                settings: Settings, clean: bool, font_identity: dict | None = None) -> str:
     fonts = font_identity if font_identity is not None else resolve_fonts(
         settings.font, clip.hook + ' ' + clip.label + ' ' + ' '.join(w.text for w in words))
-    return fingerprint(dict(stage='render-v2', source=window.identity, start=window.trim_start,
+    stage = 'render-stacked-v1' if settings.layout == 'stacked' else 'render-v2'
+    return fingerprint(dict(stage=stage, source=window.identity, start=window.trim_start,
                             duration=window.duration, hook=clip.hook, label=clip.label,
                             crop=clip.facecam_rect, words=[asdict(w) for w in words],
                             font=settings.font, fps=settings.fps, crf=settings.crf,
@@ -105,10 +119,11 @@ def render_clip(clip: ClipSpec, window: SourceWindow, words: list[Word], setting
     output.parent.mkdir(parents=True,exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='render-',dir=output.parent) as directory:
         directory = Path(directory).resolve()
-        events = overlay_events(clip.hook,clip.label,window.duration)+caption_events(words,window.duration)
+        events = (overlay_events(clip.hook,clip.label,window.duration,settings.layout)
+                  + caption_events(words,window.duration,settings.layout))
         # Relative ASS name in a controlled cwd avoids Windows drive/filter escaping entirely.
         (directory/'overlays.ass').write_text(ass_document(events,settings),encoding='utf-8')
-        graph = layout_filter(clip.facecam_rect,settings.fps)
+        graph = layout_filter(clip.facecam_rect,settings.fps,settings.layout)
         graph += ';[base]null[outv]' if clean else ';[base]ass=filename=overlays.ass[outv]'
         temporary = directory/'output.mp4'
         run(['ffmpeg','-v','error','-y','-ss',str(window.trim_start),'-i',str(window.path.resolve()),

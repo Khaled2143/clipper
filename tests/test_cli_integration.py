@@ -18,6 +18,24 @@ MEDIA_AVAILABLE = bool(shutil.which('ffmpeg') and shutil.which('ffprobe'))
 
 
 class CliTests(unittest.TestCase):
+    def test_finished_render_requires_captioning_and_a_facecam_layout(self):
+        webhook = "https://discord.com/api/webhooks/1/token"
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"DISCORD_FINISHED_WEBHOOK_URL": webhook}):
+            spec = Path(directory) / "job.yaml"
+            clip = dict(id="one", source="a.mp4", start=0, end=1, label="A", hook="Hi")
+            spec.write_text(json.dumps(dict(version=1, clips=[clip])))
+            for flags, reason in ((["--no-captions"], "--no-captions"), ([], "facecam_rect")):
+                with self.subTest(flags=flags), redirect_stderr(StringIO()) as error:
+                    self.assertEqual(main(["render-manual", str(spec), "--send-finished", *flags]), 1)
+                    self.assertIn(reason, error.getvalue())
+
+    def test_send_finished_requires_its_own_webhook_before_rendering(self):
+        with patch.dict(os.environ, {"DISCORD_FINISHED_WEBHOOK_URL": "", "DISCORD_WEBHOOK_URL": "capture"}):
+            error = StringIO()
+            with redirect_stderr(error):
+                self.assertEqual(main(["render-manual", "unused.yaml", "--send-finished"]), 1)
+            self.assertIn("DISCORD_FINISHED_WEBHOOK_URL", error.getvalue())
+
     def test_missing_tools_reports_nonzero_without_model(self):
         with tempfile.TemporaryDirectory() as d:
             spec=Path(d)/'job.yaml'

@@ -28,13 +28,26 @@ Fill in `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `DISCORD_WEBHOOK_URL`, and t
 
 Sign in once with an account allowed to clip the channels you chose. The default grant includes `clips:edit` and `user:read:chat`. For authenticated IRC fallback during a chat-service outage, run `authorize --irc-fallback` to also grant `chat:read`. The worker reads and refreshes its saved token automatically. Local credentials and state live in the ignored `.env` and `.clipbot/` paths.
 
-Keep the terminal running to watch live channels. You can start midway through a broadcast. The worker checks current live status, logs a JSON line for each completed bucket, and starts a fresh warmup after a gap in chat coverage. Edit the optional settings in `.env.example` in your own `.env` and restart to tune the detector. The default 20-message floor means quiet channels may rarely trigger.
+Keep the terminal running to watch live channels. You can start midway through a broadcast. Discord receives a notice for each live channel once the worker is watching its chat, including channels already streaming at startup. The worker logs a JSON line for each completed bucket and starts a fresh warmup after a gap in chat coverage. Edit the optional settings in `.env.example` in your own `.env` and restart to tune the detector. The default 20-message floor means quiet channels may rarely trigger.
 
 Chat messages arrive over EventSub. For watchlists of up to five channels the worker also subscribes to live-status events. For longer lists it checks live status in batches every 30 seconds so those status subscriptions do not exhaust Twitch's WebSocket allowance. [Twitch subscription limits](https://dev.twitch.tv/docs/eventsub/manage-subscriptions/#subscription-limits)
 
+### Automatic finished videos
+
+Set `DISCORD_FINISHED_WEBHOOK_URL` to the webhook for the finished channel and restart the watcher. Install the `live` and `transcription` extras and put FFmpeg and ffprobe with libass on PATH. On a Mac with Homebrew's `ffmpeg-full`, start the watcher from the checkout with:
+
+```sh
+export PATH="$(brew --prefix ffmpeg-full)/bin:$PATH"
+caffeinate -i .venv/bin/python -m clipmatch.live watch
+```
+
+A startup log with `"finish_clips": true` confirms automatic rendering is enabled. The watcher enqueues confirmed Twitch clips in its SQLite database and immediately posts the source link to the original channel. A single background subprocess downloads each public clip, runs local Whisper, and renders a 1080×1920 MP4. The saved camera crops in `clipmatch/layouts.json` are fractions of the source width and height in `[left, top, width, height]` order. Adjust a profile when a streamer changes scenes or moves their camera. The `small` speech model downloads on first use; `CLIPMATCH_MODEL` also accepts a local faster-whisper model path.
+
+Discord receives the verified master as a playable attachment. If Discord rejects its size, the sender makes a smaller full-length MP4 and keeps the master on disk. Masters, sources, subtitle files, and upload receipts are under `<state-dir>/finished/<channel>/`. Allow space for retained clips. The queue retries temporary download failures and logs `render_review` for failures that need attention. Check the finished channel before using `clipmatch-live retry-render --clip-id ID` after an uncertain upload. To add an earlier clip, run `clipmatch-live enqueue-render --channel LOGIN --clip-id ID --url URL` while the watcher is active.
+
 ### Run on Railway
 
-Deploy this repository as a **single worker** from the directory containing `railway.toml`. Attach a volume at `/data`. In Railway Variables set the same client ID, secret, channels, and Discord webhook, plus `TWITCH_REFRESH_TOKEN` seeded privately from the local `.clipbot/refresh-token` file. Stop the local watcher before transferring the current token. The worker uses Railway's volume mount path for its rotated token, pending confirmations, and cooldowns. The repository supplies the container, start command, and restart policy. The worker uses outbound connections and requires no public domain.
+Deploy this repository as a **single worker** from the directory containing `railway.toml`. Attach a volume at `/data`. In Railway Variables set the same client ID, secret, channels, and `DISCORD_WEBHOOK_URL`. To publish finished videos, also set `DISCORD_FINISHED_WEBHOOK_URL`. Stop the local watcher before transferring its current `TWITCH_REFRESH_TOKEN` from the local `.clipbot/refresh-token` file. The worker uses Railway's volume mount path for its rotated token, pending confirmations, cooldowns, render queue, and finished clips. Set `HF_HOME=/data/huggingface` to retain the speech model across deployments. The repository supplies the container, start command, and restart policy. The worker uses outbound connections and requires no public domain.
 
 ### Check the first live run
 
@@ -137,6 +150,8 @@ clips:
 ```
 
 With `--config config.yaml`, default output/cache directories are beside that config. Without `--config`, defaults are beside the spec; for the example this means `examples/renders/` and `examples/work/`. Inline `settings` in the spec override explicit config values. The root config is not auto-loaded.
+
+To send finished MP4s to a second Discord channel, create a webhook in that channel under **Edit Channel → Integrations → Webhooks**. Save it as `DISCORD_FINISHED_WEBHOOK_URL` in the local `.env`, install the `live` extra, and add `--send-finished` to the render command. The watcher uses `DISCORD_WEBHOOK_URL` for Twitch links and status. Finished-channel delivery requires a configured `facecam_rect` for each clip and captioning enabled. The renderer uploads the verified vertical master as a playable attachment. Repeating the command skips an identical MP4 already delivered to that webhook. If Discord rejects an upload, the master stays in the output folder. After a connection failure, check the channel before retrying.
 
 Expect stage messages followed by `ready for manual review: ...`. Each selected clip produces:
 

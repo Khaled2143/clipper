@@ -53,9 +53,12 @@ def fitted_size(text: str, maximum: int, width: int) -> int:
     return size
 
 
-def overlay_events(hook: str, label: str, duration: float) -> list[str]:
+def overlay_events(hook: str, label: str, duration: float, layout: str = 'manual') -> list[str]:
     if len(label) > 30:
         raise ValueError('label must be at most 30 characters; it will not be truncated')
+    if layout == 'stacked':
+        label_text = r'{\an1\pos(42,689)\fs32\c&HFFFFFF&\alpha&H20&\bord2\shad1}' + escape_ass(label)
+        return [event(0, duration, 'Label', label_text, 1)]
     lines = textwrap.wrap(escape_ass(hook), width=27)
     if len(lines) > 3:
         raise ValueError('Hook is too long to fit safely; use at most about 75 characters')
@@ -67,7 +70,7 @@ def overlay_events(hook: str, label: str, duration: float) -> list[str]:
             event(0, duration, 'Label', label_text, 1)]
 
 
-def caption_events(words: list[Word], duration: float) -> list[str]:
+def caption_events(words: list[Word], duration: float, layout: str = 'manual') -> list[str]:
     words = clean_words(words, duration)
     events = []
     groups, current, chars = [], [], 0
@@ -90,7 +93,8 @@ def caption_events(words: list[Word], duration: float) -> list[str]:
             end = min(word.end, group[active+1].start) if active+1<len(group) else word.end
             if end > word.start:
                 size = fitted_size(' '.join(w.text for w in group), 56, 760)
-                prefix = r'{\pos(490,1360)\fs' + str(size) + '}'
+                position = '510,836' if layout == 'stacked' else '490,1360'
+                prefix = r'{\pos(' + position + r')\fs' + str(size) + '}'
                 events.append(event(word.start, end, 'Caption', prefix+' '.join(pieces)))
     return events
 
@@ -99,6 +103,6 @@ def write_captions(words: list[Word], ass_path: Path, srt_path: Path,
                    duration: float, settings: Settings) -> None:
     words = clean_words(words, duration)
     ass_path.parent.mkdir(parents=True, exist_ok=True)
-    ass_path.write_text(ass_document(caption_events(words,duration),settings), encoding='utf-8')
+    ass_path.write_text(ass_document(caption_events(words,duration,settings.layout),settings), encoding='utf-8')
     srt_path.write_text('\n\n'.join(f'{i}\n{timestamp(w.start,srt=True)} --> {timestamp(w.end,srt=True)}\n{w.text}'
                                    for i,w in enumerate(words,1))+ ('\n' if words else ''), encoding='utf-8')

@@ -2,6 +2,10 @@
 
 Approved by the owner in conversation following design review. Milestone implementation remains gated by the agreed stop points.
 
+## Phase 2 of the live clip workflow
+
+The watcher posts confirmed Twitch links and stream status to `DISCORD_WEBHOOK_URL`. A separate script downloads the confirmed clip, applies the streamer's saved facecam and gameplay layout, transcribes the audio locally, burns in captions, and exports the vertical MP4. It sends that MP4 as an attachment to `DISCORD_FINISHED_WEBHOOK_URL`, a webhook created in the finished-clips channel. The renderer's `--send-finished` option handles this delivery.
+
 ## Intent and agreed scope
 
 Produce 3–5 unique short videos per day, manually approved and cross-posted by the owner to TikTok, YouTube Shorts, and Instagram Reels. Quality takes precedence over the count: a day may produce fewer or no passing clips. Eligible content includes genuine reactions, funny commentary, and surprising gameplay with an understandable setup and payoff.
