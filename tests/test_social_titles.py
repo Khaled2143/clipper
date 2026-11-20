@@ -18,6 +18,78 @@ from clipmatch import social_titles
 
 
 class SocialTitleTests(unittest.TestCase):
+    def test_future_model_drafts_receive_reviewed_examples_as_style_only(self):
+        from clipmatch.title_feedback import Feedback
+
+        finished = self.root / "finished"
+        master = finished / "jynxzi" / "new" / "renders" / "clip.mp4"
+        master.parent.mkdir(parents=True)
+        feedback = Feedback(finished)
+        feedback.save(feedback.register("jynxzi", self.url + "old", "old", "Jynxzi chases a ball"),
+                      "down", "Jynxzi goes back for his own rebound")
+        feedback.save(feedback.register("jynxzi", self.url + "new", "new", "An older draft for this clip"),
+                      "up", "")
+        draft = dict(title="Jynxzi finds a wrench in the drawer", description="He opens the drawer.")
+        examples = [{"original": "Jynxzi chases a ball", "vote": "down",
+                     "preferred": "Jynxzi goes back for his own rebound"}]
+
+        def inference(model, frames, context, prompt, schema):
+            if "candidates" in schema["properties"]:
+                self.assertEqual(context["title_preferences"], examples)
+                return dict(candidates=[draft])
+            self.assertNotIn("title_preferences", context)
+            if "reviews" in schema["properties"]:
+                return dict(reviews=[dict(decision="publish")])
+            return {key: "He opens a drawer." for key in schema["properties"]}
+
+        data = dict(label="jynxzi", source=dict(twitch_url=self.url + "new"))
+        with patch.object(social_titles, "selected_sheet", return_value="pixels"), \
+                patch.object(social_titles, "transcript", return_value=""), \
+                patch.object(social_titles, "ask_model", side_effect=inference):
+            content = social_titles.post_copy(master, "new", data, "model")
+        self.assertEqual(content.splitlines()[0], draft["title"])
+
+    def test_finished_clip_review_link_and_feedback_reach_the_local_editor(self):
+        from clipmatch.title_feedback import Feedback
+
+        finished = self.root / "finished"
+        master = finished / "jynxzi" / "new" / "renders" / "clip.mp4"
+        master.parent.mkdir(parents=True)
+        model = self.root / "model.gguf"
+        model.touch()
+        feedback = Feedback(finished)
+        feedback.save(feedback.register("agent00", self.url + "old", "old", "Agent00 opens the box"),
+                      "up", "Agent00 finds the spare key")
+        prompts = []
+        draft = "Jynxzi keeps a spare putter in the mailbox"
+
+        class Model:
+            def __init__(self, **options):
+                pass
+
+            def __call__(self, prompt, **options):
+                prompts.append(prompt)
+                return {"choices": [{"text": draft if len(prompts) == 1 else "YES"}]}
+
+            def close(self):
+                pass
+
+        master.with_suffix(".json").write_text(json.dumps(dict(
+            label="jynxzi", source=dict(twitch_url=self.url + "new"))))
+        beats = ((1, 2, "The spare putter is in the mailbox"),)
+        with patch.dict(os.environ, PUBLIC_POSTING_ENABLED="1", PUBLISH_MEDIA_ORIGIN="https://clips.example",
+                        SOCIAL_VISION_MODEL="", SOCIAL_TITLE_MODEL=str(model)), \
+                patch.dict(sys.modules, llama_cpp=SimpleNamespace(Llama=Model)), \
+                patch.object(social_titles, "speech_evidence", return_value=("", (), beats)), \
+                patch("clipmatch.title_screen.screen_outcome", return_value=None):
+            content = social_titles.social_content(master, "new", include_review=True)
+            self.assertEqual(social_titles.social_content(master, "new", include_review=True), content)
+        self.assertEqual(content.splitlines()[0], draft)
+        self.assertRegex(content.splitlines()[-1], r"^\[Review title\]\(https://clips\.example/title-review/[\w-]{43}\)$")
+        self.assertEqual(len(prompts), 2)
+        self.assertIn("Agent00 finds the spare key", prompts[0])
+        self.assertNotIn("Agent00", prompts[1])
+
     def test_titles_strip_whole_emoji_sequences_before_selection_and_deduplication(self):
         clean = "Jynxzi’s GTA 6 café getaway?"
         dirty = "Jynxzi’s 👨🏾‍🚀 GTA 6 café🇺🇸getaway1️⃣⁉️?"

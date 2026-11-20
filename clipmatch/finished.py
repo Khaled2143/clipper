@@ -101,7 +101,7 @@ async def deliver_finished(output: Path, receipt: Path, webhook: str) -> bool:
     if deliveries.get(webhook_id) == digest:
         return False
 
-    content = await asyncio.to_thread(social_content, output, digest)
+    content = await asyncio.to_thread(social_content, output, digest, include_review=True)
     async with ClientSession() as session:
         try:
             await _upload(session, webhook, output, output.name, content)

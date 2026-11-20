@@ -19,6 +19,7 @@ from .finish_clip import clip_directory, validate_clip
 from .live_api import ApiError, discord_webhook_url, send_discord
 from .local_copy import plain_title
 from .tiktok_publisher import Buffer, BufferFailure, confirm_public, create_tiktok, post_result
+from .title_feedback import add_review_routes, review_link
 
 
 def _prepare(root, channel, clip_id, source_url):
@@ -168,18 +169,21 @@ class Publications:
                 report["url"] = state.get("url")
             log("publish_" + phase, **report)
 
-    def claim_discord_receipt(self):
+    def due_discord_receipt(self):
+        return self.db.execute("""SELECT r.clip_id,r.platform,r.title,r.url,c.channel,c.source_url,c.digest
+            FROM publish_discord_receipts r LEFT JOIN publish_clips c ON c.id=r.clip_id
+            WHERE r.phase='pending' AND r.ready_at<=? ORDER BY r.ready_at,r.rowid LIMIT 1""",
+                               (time.time(),)).fetchone()
+
+    def claim_discord_receipt(self, clip_id, platform):
         with self.db:
-            row = self.db.execute("""SELECT clip_id,platform,title,url FROM publish_discord_receipts
-                WHERE phase='pending' AND ready_at<=? ORDER BY ready_at,rowid LIMIT 1""", (time.time(),)).fetchone()
-            if row:
-                # A crash during POST leaves the delivery in review. Discord cannot look up a webhook
-                # message without its ID, so replaying it on restart could create a second receipt.
-                claimed = self.db.execute("""UPDATE publish_discord_receipts SET phase='review',
-                    reason='Delivery started without a saved Discord acknowledgment'
-                    WHERE clip_id=? AND platform=? AND phase='pending'""", row[:2])
-                if claimed.rowcount:
-                    return row
+            # A crash during POST leaves the delivery in review. Discord cannot look up a webhook
+            # message without its ID, so replaying it on restart could create a second receipt.
+            claimed = self.db.execute("""UPDATE publish_discord_receipts SET phase='review',
+                reason='Delivery started without a saved Discord acknowledgment'
+                WHERE clip_id=? AND platform=? AND phase='pending' AND ready_at<=?""",
+                                      (clip_id, platform, time.time()))
+            return claimed.rowcount == 1
 
     def finish_discord_receipt(self, clip_id, platform, phase, message_id, reason, ready_at):
         with self.db:
@@ -207,6 +211,7 @@ def media_app(queue):
 
     app.router.add_get("/healthz", health)
     app.router.add_get("/media/{token:[A-Za-z0-9_-]{43}}.mp4", media)
+    add_review_routes(app, queue.root / "finished")
     return app
 
 
@@ -224,7 +229,7 @@ def media_origin(env):
 class Publisher:
     def __init__(self, queue, session, env, log):
         self.queue, self.session, self.env, self.log = queue, session, env, log
-        self.interval = max(0, float(env.get("PUBLISH_INTERVAL_MINUTES", "60"))) * 60
+        self.interval = max(0, float(env.get("PUBLISH_INTERVAL_MINUTES", "0"))) * 60
         self.api = Buffer(session, env["BUFFER_API_KEY"]) if env.get("BUFFER_API_KEY") else None
         self.channel = None
         self.recheck_channel = 0
@@ -260,15 +265,22 @@ class Publisher:
     async def discord_receipts(self):
         if not self.finished_webhook or not self.can_create("discord_receipts"):
             return
-        row = self.queue.claim_discord_receipt()
+        row = self.queue.due_discord_receipt()
         if not row:
             return
-        clip_id, platform, title, url = row
+        clip_id, platform, title, url, channel, source_url, digest = row
         label = {"youtube": "YouTube Short", "tiktok": "TikTok"}[platform]
+        content = f"{label} published\n{title}\n<{url}>"
+        if self.origin and digest:
+            link = await asyncio.to_thread(review_link, self.origin, self.queue.root / "finished",
+                                           channel, source_url, digest, title)
+            if link:
+                content += "\n" + link
+        if not self.queue.claim_discord_receipt(clip_id, platform):
+            return
         message_id, delay = None, 0
         try:
-            message_id = await send_discord(self.session, self.finished_webhook, f"{label} published\n{title}\n<{url}>",
-                                            attempts=1)
+            message_id = await send_discord(self.session, self.finished_webhook, content, attempts=1)
         except ApiError as exc:
             reason = str(exc)
             if exc.retry_after is None:

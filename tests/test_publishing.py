@@ -3,6 +3,7 @@ import asyncio
 import hashlib
 import json
 from pathlib import Path
+import re
 import sqlite3
 import tempfile
 import unittest
@@ -161,6 +162,58 @@ class PublicationTests(unittest.IsolatedAsyncioTestCase):
         with patch("clipmatch.youtube_publisher.youtube_step", new=AsyncMock(return_value=state)):
             await publisher.youtube()
 
+    async def test_publication_receipts_share_editable_title_feedback_without_changing_copy(self):
+        http = Transport()
+        publisher = self.receipt_worker(http)
+        await self.public_short(publisher, "TitleVote")
+        queue = publisher.queue
+        queue.save("TitleVote", "tiktok", {"phase": "published", "url": "https://www.tiktok.com/@creator/video/235"},
+                   publisher.log, discord_receipt=True)
+        for message_id in ("101", "102"):
+            http.expect(200, {"id": message_id})
+            await publisher.discord_receipts()
+        paths = [re.search(r"https://clips\.example(/title-review/[\w-]+)", call[2]["json"]["content"]).group(1)
+                 for call in http.calls]
+        self.assertEqual(len(paths), 2)
+        self.assertEqual(paths[0], paths[1])
+        token, = queue.db.execute("SELECT token FROM publish_clips").fetchone()
+        self.assertNotIn(token, paths[0])
+        resumed = self.receipt_worker(http)
+        async with TestClient(TestServer(media_app(resumed.queue))) as client:
+            self.assertEqual((await client.get("/title-review/" + "a" * 43)).status, 404)
+            page = await client.get(paths[0])
+            self.assertIn("YourRAGE chases the loose ball", await page.text())
+            self.assertEqual(page.headers["Cache-Control"], "private, no-store")
+            for form, expected in [
+                ({"vote": "maybe"}, 400),
+                ({"vote": "down", "preferred": "x" * 101}, 400),
+                ({"vote": "up"}, 303),
+                ({"vote": "down", "preferred": 'YourRAGE & the "easy" rebound'}, 303),
+            ]:
+                response = await client.post(paths[0], data=form, allow_redirects=False)
+                self.assertEqual(response.status, expected)
+            page = await client.get(paths[1])
+            self.assertIn("YourRAGE &amp; the &quot;easy&quot; rebound", await page.text())
+            self.assertIn('value="down" checked', await page.text())
+        self.assertEqual(queue.db.execute("SELECT title FROM publish_clips").fetchone(),
+                         ("YourRAGE chases the loose ball",))
+        self.assertEqual(queue.db.execute("SELECT phase FROM publish_jobs").fetchall(),
+                         [("published",), ("published",)])
+
+    async def test_interrupted_review_link_lookup_leaves_unsent_receipt_pending(self):
+        http = Transport()
+        publisher = self.receipt_worker(http)
+        await self.public_short(publisher, "InterruptedReviewLink")
+        with patch("clipmatch.publishing.asyncio.to_thread", side_effect=asyncio.CancelledError):
+            with self.assertRaises(asyncio.CancelledError):
+                await publisher.discord_receipts()
+        self.assertEqual(http.calls, [])
+        resumed = self.receipt_worker(http)
+        http.expect(200, {"id": "103"})
+        await resumed.discord_receipts()
+        self.assertEqual(len(http.calls), 1)
+        self.assertEqual(resumed.queue.db.execute("SELECT phase FROM publish_discord_receipts").fetchone(), ("sent",))
+
     async def test_only_future_public_confirmations_send_one_finished_receipt_per_platform(self):
         http = Transport()
         previous = self.receipt_worker(http, DISCORD_FINISHED_WEBHOOK_URL="")
@@ -269,6 +322,26 @@ class PublicationTests(unittest.IsolatedAsyncioTestCase):
             await self.receipt_cycle(self.receipt_worker(http))
         self.assertEqual(len(http.calls), 2)
         self.assertNotIn("private-provider-text", str(publisher.log.call_args_list))
+
+    async def test_default_publisher_accepts_consecutive_clips_on_both_platforms(self):
+        queue = Publications(self.db, self.root)
+        for slug in ("First", "Second"):
+            self.render(slug)
+            await queue.collect()
+        publisher = self.publisher(queue)
+        publisher.api = AsyncMock()
+        publisher.api.destination.return_value = {"id": "channel", "serviceId": "creator"}
+        with patch("clipmatch.youtube_publisher.youtube_step", new_callable=AsyncMock) as upload:
+            for slug in ("First", "Second"):
+                upload.return_value = {"phase": "pending", "remote_id": slug, "delay": 60}
+                publisher.api.request.return_value = {"createPost": {"post": {
+                    "id": slug, "channelId": "channel", "status": "sending"}}}
+                await publisher.youtube()
+                await publisher.tiktok()
+        rows = self.db.execute("""SELECT clip_id,platform,json_extract(state,'$.remote_id')
+            FROM publish_jobs ORDER BY clip_id,platform""").fetchall()
+        self.assertEqual(rows, [(slug, platform, slug) for slug in ("First", "Second")
+                                for platform in ("tiktok", "youtube")])
 
     async def test_rate_capped_tiktok_waits_and_youtube_still_advances(self):
         queue = Publications(self.db, self.root)

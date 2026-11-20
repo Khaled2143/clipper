@@ -1,9 +1,11 @@
 """Write one clip's headlines on the worker CPU, using only evidence from the edit."""
 from contextlib import closing
+import json
 from pathlib import Path
 import re
 
 from .local_copy import _FILLER, _WORDS, contextual_title, safe_text
+from .title_feedback import STYLE_GUIDANCE
 
 
 def _words(text):
@@ -114,13 +116,19 @@ def payoff_setup(beats, outcome):
     return None
 
 
-def write_titles(model_path, name, category, beats, outcome, recent, *, frames=None):
+def write_titles(model_path, name, category, beats, outcome, recent, *, frames=None, preferences=()):
     """Return verified alternatives in preference order. The model lives only for this clip."""
     if (not beats and not frames) or not Path(model_path).is_file():
         return []
     from llama_cpp import Llama
 
     context = f"Channel: {name}." + (f" Game: {category}." if category else "")
+    voice = _VOICE
+    style = ""
+    if preferences:
+        voice += " " + STYLE_GUIDANCE
+        # Keep examples out of the evidence sent to the factual checks and escape chat role markers.
+        style = "\nTitle preferences: " + json.dumps(preferences, ensure_ascii=False).replace("<", "\\u003c")
     with closing(Llama(model_path=str(model_path), n_ctx=2048, n_batch=256, n_threads=2, n_threads_batch=2,
                        n_gpu_layers=0, verbose=False)) as model:
         setup = payoff_setup(beats, outcome)
@@ -140,7 +148,7 @@ def write_titles(model_path, name, category, beats, outcome, recent, *, frames=N
                 ("Channel: Lena. Heard: This is my last lockpick. In-game result seconds later: busted.",
                  "So much for Lena’s last lockpick"),
             )
-            title = _answer(model, _VOICE, facts, examples=examples)
+            title = _answer(model, voice, facts + style, examples=examples)
             if title not in recent and supported_draft(title, name, category, [setup], outcome, implied_payoff=True):
                 verdict = _answer(model, "Does the joke follow directly from these words and the game's result? "
                                   "Allow figurative wording for an in-game event. Reject invented actions, people, "
@@ -151,7 +159,7 @@ def write_titles(model_path, name, category, beats, outcome, recent, *, frames=N
 
         def draft(facts, lines, visible):
             evidence = context + " " + facts
-            title = _answer(model, _VOICE, evidence, examples=_EXAMPLES)
+            title = _answer(model, voice, evidence + style, examples=_EXAMPLES)
             def candidates():
                 yield title
                 yield _answer(model, "Turn the supplied line into a short conversational headline. "
